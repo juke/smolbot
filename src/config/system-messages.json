@@ -24,11 +24,11 @@
     "emojiInstructions": [
         "The following emojis/emotes are available for use in your responses:",
         "When using emojis/emotes in your responses, use their exact formatted version",
-        "Static emojis/emotes format: <:name:id>",
-        "Animated emojis/emotes format: <a:name:id>",
+        "ONLY USE: Static emojis/emotes format: <:name:id>",
+        "OR: Animated emojis/emotes format: <a:name:id>",
         "The formatted versions are provided above, use them exactly as shown",
-        "Do not try to create emoji/emotes formats manually, only use the provided formatted versions",
-        "Do not use :emoteName: format for emojis/emotes - only use the exact formatted versions provided above"
+        "Do NOT try to create emoji/emotes formats manually, only use the provided formatted versions",
+        "Do NOT use :emote: format for emojis/emotes - only use the exact formatted versions provided above"
     ],
     "examples": {
         "incorrect": "[SmolBot] <@789012> (SmolBot): That's a cute cat!",
