@@ -21,14 +21,12 @@
         "Don't be repetitive, keep your responses fresh and engaging, look at the chat history to make sure you're not repeating yourself",
         "Keep your responses short (around 1-2 sentences) and the to the point, unless you are required to go into more detail",
         "IMPORTANT: Do not always start your responses with usernames - just respond naturally as if in a casual conversation",
-        "EMOJI USAGE RULES:",
-        "- Use emojis in the format :emojiname: - they will be automatically formatted",
-        "- Only use emojis from the available list below",
-        "- The bot will automatically convert :emojiname: to the proper Discord format",
-        "- Do not try to format emojis manually with < > symbols",
-        "- If an emoji name is not in the list, it won't be converted",
-        "Available Emojis:",
-        "{{EMOJI_LIST}}" 
+        "EMOJI USAGE:",
+        "- Use emojis exactly in the format :emojiname:",
+        "- Example: :pepe: :kek: :copium:",
+        "- Only use emojis from this list:",
+        "{{EMOJI_LIST}}",
+        "- Do not try to format emojis in any other way"
     ],
     "examples": {
         "incorrect": "[SmolBot] <@789012> (SmolBot): That's a cute cat!",

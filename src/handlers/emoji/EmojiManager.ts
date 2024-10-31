@@ -1,16 +1,20 @@
-import { Client, GuildEmoji } from "discord.js";
+import { Client } from "discord.js";
 import { createLogger } from "../../utils/logger";
 
 const logger = createLogger("EmojiManager");
 
 /**
- * Simplified emoji manager for handling Discord guild emojis
+ * Manages Discord guild emoji formatting and caching
  */
 export class EmojiManager {
+    // Map emoji names to their Discord formatted versions
     private emojiMap: Map<string, string>;
+    // Store just the names for the bot's context
+    private availableEmojis: Set<string>;
 
     constructor() {
         this.emojiMap = new Map();
+        this.availableEmojis = new Set();
     }
 
     /**
@@ -18,34 +22,39 @@ export class EmojiManager {
      */
     public updateEmojiCache(client: Client): void {
         this.emojiMap.clear();
-        const emojis: string[] = [];
+        this.availableEmojis.clear();
 
         client.guilds.cache.forEach(guild => {
             guild.emojis.cache.forEach(emoji => {
                 if (emoji.name) {
+                    const name = emoji.name.toLowerCase();
+                    // Store Discord's formatted version
                     const formatted = `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`;
-                    this.emojiMap.set(emoji.name.toLowerCase(), formatted);
-                    emojis.push(`${emoji.name} - Use :${emoji.name}: to get ${formatted}`);
+                    this.emojiMap.set(name, formatted);
+                    // Store just the name for the bot's context
+                    this.availableEmojis.add(name);
                 }
             });
         });
 
         logger.debug({ 
-            emojiCount: emojis.length,
-            availableEmojis: emojis
+            emojiCount: this.emojiMap.size,
+            availableEmojis: Array.from(this.availableEmojis)
         }, "Updated emoji cache");
     }
 
     /**
-     * Gets all available emojis with usage instructions
+     * Gets list of available emoji names for bot context
+     * Returns simple :emojiname: format
      */
     public getAvailableEmojis(): string[] {
-        return Array.from(this.emojiMap.entries())
-            .map(([name, formatted]) => `${name} - Use :${name}: to get ${formatted}`);
+        return Array.from(this.availableEmojis)
+            .map(name => `:${name}:`);
     }
 
     /**
-     * Formats text by replacing :emojiname: with proper Discord emoji format
+     * Formats message text by replacing :emojiname: with Discord format
+     * This happens after the bot generates its response
      */
     public formatText(text: string): string {
         return text.replace(/:(\w+):/g, (match, emojiName) => {
@@ -55,9 +64,9 @@ export class EmojiManager {
     }
 
     /**
-     * Gets a single formatted emoji by name
+     * Checks if an emoji name is available
      */
-    public getEmoji(name: string): string | undefined {
-        return this.emojiMap.get(name.toLowerCase());
+    public hasEmoji(name: string): boolean {
+        return this.availableEmojis.has(name.toLowerCase());
     }
 } 
