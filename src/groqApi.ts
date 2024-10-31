@@ -3,7 +3,6 @@ import { createLogger } from "./utils/logger";
 import { ImageAnalysis, EmojiInfo } from "./types";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { RateLimiter } from "./utils/RateLimiter";
 
 const logger = createLogger("GroqAPI");
 
@@ -17,6 +16,114 @@ interface ModelConfig {
     maxRetries: number;
 }
 
+/**
+ * Manages API request rate limiting
+ */
+class RequestRateLimiter {
+    private requestsThisMinute: number = 0;
+    private minuteStartTime: number;
+    private readonly maxRequestsPerMinute: number;
+    private requestQueue: Array<{
+        resolve: () => void;
+        reject: (error: Error) => void;
+        timestamp: number;
+    }> = [];
+    private processingQueue: boolean = false;
+
+    constructor(maxRequestsPerMinute: number) {
+        this.maxRequestsPerMinute = maxRequestsPerMinute;
+        this.minuteStartTime = Date.now();
+        
+        logger.info({ 
+            maxRequestsPerMinute,
+        }, "Rate limiter initialized");
+    }
+
+    /**
+     * Waits for a request slot to become available
+     * @throws Error if waiting time exceeds 5 minutes
+     */
+    public async waitForToken(): Promise<void> {
+        this.checkMinuteReset();
+        
+        if (this.requestsThisMinute < this.maxRequestsPerMinute) {
+            this.requestsThisMinute++;
+            return Promise.resolve();
+        }
+
+        return new Promise((resolve, reject) => {
+            this.requestQueue.push({
+                resolve,
+                reject,
+                timestamp: Date.now()
+            });
+
+            // Start processing queue if not already running
+            this.processQueue().catch(error => {
+                logger.error({ error }, "Error processing rate limit queue");
+            });
+        });
+    }
+
+    /**
+     * Processes the request queue
+     */
+    private async processQueue(): Promise<void> {
+        if (this.processingQueue) return;
+        this.processingQueue = true;
+
+        try {
+            while (this.requestQueue.length > 0) {
+                this.checkMinuteReset();
+
+                if (this.requestsThisMinute >= this.maxRequestsPerMinute) {
+                    const timeUntilReset = 60000 - (Date.now() - this.minuteStartTime);
+                    await new Promise(resolve => setTimeout(resolve, timeUntilReset));
+                    continue;
+                }
+
+                const request = this.requestQueue[0];
+                const waitTime = Date.now() - request.timestamp;
+
+                if (waitTime >= 300000) { // 5 minutes
+                    request.reject(new Error("Rate limit exceeded: Maximum wait time reached"));
+                    this.requestQueue.shift();
+                    continue;
+                }
+
+                this.requestsThisMinute++;
+                request.resolve();
+                this.requestQueue.shift();
+            }
+        } finally {
+            this.processingQueue = false;
+        }
+    }
+
+    /**
+     * Resets request count if minute has elapsed
+     */
+    private checkMinuteReset(): void {
+        const now = Date.now();
+        const timeElapsed = now - this.minuteStartTime;
+        
+        if (timeElapsed >= 60000) { // 60 seconds in milliseconds
+            const minutesElapsed = Math.floor(timeElapsed / 60000);
+            this.requestsThisMinute = 0;
+            this.minuteStartTime = now - (timeElapsed % 60000);
+            
+            logger.debug({ 
+                minutesElapsed,
+                requestsReset: true,
+                newMinuteStartTime: new Date(this.minuteStartTime).toISOString()
+            }, "Request counter reset");
+        }
+    }
+}
+
+/**
+ * Handles Groq API interactions with rate limiting and fallback handling
+ */
 export class GroqHandler {
     private groq: Groq;
     private readonly modelConfigs: {
@@ -24,170 +131,29 @@ export class GroqHandler {
         vision: ModelConfig;
     };
     private emojiList: EmojiInfo[] = [];
-    private rateLimiter: RateLimiter;
+    private rateLimiter: RequestRateLimiter;
 
     constructor(apiKey: string) {
         this.groq = new Groq({
             apiKey,
         });
 
-        // Initialize rate limiter with 30 requests per minute
-        this.rateLimiter = new RateLimiter({
-            tokensPerInterval: 30,
-            intervalMs: 60000, // 1 minute
-            maxTokens: 30
-        });
+        this.rateLimiter = new RequestRateLimiter(30);
 
-        // Define model configurations with fallbacks
         this.modelConfigs = {
             chat: {
-                primary: "llama-3.2-90b-text-preview",
-                fallback: "llama-3.1-70b-versatile",
-                instantFallback: "llama-3.1-8b-instant",
+                primary: "mixtral-8x7b-32768",
+                fallback: "llama-70b-4096",
+                instantFallback: "llama-13b-4096",
                 maxRetries: 3
             },
             vision: {
-                primary: "llama-3.2-90b-vision-preview",
+                primary: "llama-3.2-11b-vision-preview",
                 fallback: "llama-3.2-11b-vision-preview",
-                instantFallback: "", // Vision models don't have instant fallback
-                maxRetries: 3
+                instantFallback: "llama-3.2-11b-vision-preview",
+                maxRetries: 2
             }
         };
-    }
-
-    /**
-     * Executes a rate-limited API call
-     */
-    private async executeWithRateLimit<T>(
-        operation: () => Promise<T>,
-        context: string
-    ): Promise<T> {
-        try {
-            await this.rateLimiter.waitForToken();
-            return await operation();
-        } catch (error) {
-            if (error instanceof Error && error.message.includes("rate limit")) {
-                logger.warn({ context }, "Rate limit exceeded, waiting for next interval");
-                await this.rateLimiter.waitForToken();
-                return await operation();
-            }
-            throw error;
-        }
-    }
-
-    /**
-     * Attempts to execute a Groq API call with retries and fallbacks
-     */
-    private async executeWithFallback<T>(
-        operation: (model: string) => Promise<T>,
-        config: ModelConfig,
-        context: string
-    ): Promise<T> {
-        // If instant fallback flag is set, use instant model immediately
-        if (process.env.USE_INSTANT_FALLBACK === "true" && config.instantFallback) {
-            try {
-                return await this.executeWithRateLimit(
-                    () => operation(config.instantFallback),
-                    context
-                );
-            } catch (error) {
-                logger.error({ 
-                    error, 
-                    model: config.instantFallback,
-                    context 
-                }, "Error with instant fallback model");
-                throw error;
-            }
-        }
-
-        // If regular fallback flag is set, use fallback model
-        if (process.env.USE_FALLBACK_MODEL === "true") {
-            try {
-                return await this.executeWithRateLimit(
-                    () => operation(config.fallback),
-                    context
-                );
-            } catch (error) {
-                logger.error({ 
-                    error, 
-                    model: config.fallback,
-                    context 
-                }, "Error with fallback model");
-                throw error;
-            }
-        }
-
-        // Otherwise use normal fallback logic
-        let lastError: unknown;
-        
-        // Try primary model with retries
-        for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
-            try {
-                return await this.executeWithRateLimit(
-                    () => operation(config.primary),
-                    context
-                );
-            } catch (error) {
-                lastError = error;
-                logger.warn({ 
-                    error, 
-                    model: config.primary, 
-                    attempt,
-                    context 
-                }, "Primary model attempt failed");
-            }
-        }
-
-        // Try fallback model with retries
-        for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
-            try {
-                logger.info({ 
-                    model: config.fallback,
-                    attempt,
-                    context 
-                }, "Attempting fallback model");
-                return await this.executeWithRateLimit(
-                    () => operation(config.fallback),
-                    context
-                );
-            } catch (error) {
-                lastError = error;
-                logger.warn({ 
-                    error,
-                    model: config.fallback,
-                    attempt,
-                    context 
-                }, "Fallback model attempt failed");
-            }
-        }
-
-        // Try instant fallback as last resort for text models
-        if (config.instantFallback) {
-            for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
-                try {
-                    logger.info({ 
-                        model: config.instantFallback,
-                        attempt,
-                        context 
-                    }, "Attempting instant fallback model");
-                    return await this.executeWithRateLimit(
-                        () => operation(config.instantFallback),
-                        context
-                    );
-                } catch (error) {
-                    lastError = error;
-                    logger.warn({ 
-                        error,
-                        model: config.instantFallback,
-                        attempt,
-                        context 
-                    }, "Instant fallback model attempt failed");
-                }
-            }
-        }
-
-        // If all attempts fail, throw the last error
-        throw lastError;
     }
 
     /**
@@ -420,6 +386,54 @@ That's a cute cat!`;
         } catch (error) {
             logger.error({ error, imageUrl }, "Error performing detailed analysis after all attempts");
             return "Error analyzing image";
+        }
+    }
+
+    /**
+     * Executes an operation with rate limiting and fallback handling
+     */
+    private async executeWithFallback<T>(
+        operation: (model: string) => Promise<T>,
+        config: ModelConfig,
+        operationName: string
+    ): Promise<T> {
+        let lastError: Error | undefined;
+        let attempts = 0;
+
+        const models = [
+            config.primary,
+            ...(process.env.USE_FALLBACK_MODEL ? [config.fallback] : []),
+            ...(process.env.USE_INSTANT_FALLBACK ? [config.instantFallback] : [])
+        ];
+
+        for (const model of models) {
+            try {
+                await this.rateLimiter.waitForToken();
+                return await operation(model);
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error("Unknown error");
+                logger.warn({ error: lastError, model, attempt: ++attempts }, 
+                    `${operationName} failed, trying next model`);
+            }
+        }
+
+        throw lastError || new Error(`All ${operationName} attempts failed`);
+    }
+
+    /**
+     * Executes an operation with rate limiting
+     */
+    private async executeWithRateLimit<T>(
+        operation: () => Promise<T>,
+        operationName: string
+    ): Promise<T> {
+        try {
+            await this.rateLimiter.waitForToken();
+            return await operation();
+        } catch (error) {
+            const typedError = error instanceof Error ? error : new Error("Unknown error");
+            logger.error({ error: typedError }, `${operationName} failed`);
+            throw typedError;
         }
     }
 } 

@@ -1,12 +1,19 @@
-import { Message } from "discord.js";
+import { Message, TextBasedChannel } from "discord.js";
 import { GroqHandler } from "../../groqApi";
 import { ImageProcessor } from "./ImageProcessor";
 import { ContextBuilder } from "./ContextBuilder";
 import { ChannelCacheManager } from "../cache/ChannelCacheManager";
-import { ChannelCache, CachedMessage } from "../../types";
+import { ChannelCache } from "../../types";
 import { createLogger } from "../../utils/logger";
 
 const logger = createLogger("BotMentionHandler");
+
+/**
+ * Type for channels that support typing indicators
+ */
+type TypingCapableChannel = TextBasedChannel & {
+    sendTyping: () => Promise<void>;
+};
 
 /**
  * Handles bot mention interactions
@@ -32,11 +39,11 @@ export class BotMentionHandler {
         }
 
         try {
-            // Get previous context without the current message
+            // Get context and analysis before starting typing
             const previousContext = await this.contextBuilder.buildContext(cache, message, 20, true);
             const detailedAnalysis = await this.getDetailedImageAnalysis(message, cache);
             
-            // Format the current message separately
+            // Format the current message
             const currentMessage = {
                 content: message.content,
                 author: {
@@ -46,7 +53,6 @@ export class BotMentionHandler {
                 referencedMessage: message.reference?.messageId
             };
             
-            // Combine previous context and detailed analysis into a single context string
             const fullContext = `${previousContext}${
                 detailedAnalysis ? `\n\n[Detailed Analysis: ${detailedAnalysis}]` : ""
             }`;
@@ -60,30 +66,68 @@ export class BotMentionHandler {
                     detailedAnalysis: detailedAnalysis || "No image analysis"
                 }
             }, "Bot's view of conversation");
+            // Start typing just before generating response
+            const typingInterval = this.startTypingInterval(message.channel);
             
-            const response = await this.groqHandler.generateResponse(
-                currentMessage,
-                fullContext
-            );
+            try {
+                const response = await this.groqHandler.generateResponse(
+                    currentMessage,
+                    fullContext
+                );
 
-            const botResponse = await message.reply(response);
-            
-            // Process and cache the bot's response
-            const images = await this.imageProcessor.processImages(botResponse);
-            this.cacheManager.addMessage(message.channelId, {
-                id: botResponse.id,
-                content: botResponse.content,
-                authorId: botResponse.author.id,
-                authorName: botResponse.author.username,
-                timestamp: botResponse.createdAt,
-                images,
-                referencedMessage: botResponse.reference?.messageId
-            });
+                // Clear typing before sending response
+                clearInterval(typingInterval);
+                const botResponse = await message.reply(response);
+                
+                // Process and cache the bot's response
+                const images = await this.imageProcessor.processImages(botResponse);
+                this.cacheManager.addMessage(message.channelId, {
+                    id: botResponse.id,
+                    content: botResponse.content,
+                    authorId: botResponse.author.id,
+                    authorName: botResponse.author.username,
+                    timestamp: botResponse.createdAt,
+                    images,
+                    referencedMessage: botResponse.reference?.messageId
+                });
+            } catch (error) {
+                clearInterval(typingInterval);
+                throw error; // Re-throw to be caught by outer try-catch
+            }
 
         } catch (error) {
             logger.error({ error, messageId: message.id }, "Error handling bot mention");
             await message.reply("I encountered an error while processing your message.");
         }
+    }
+
+    /**
+     * Starts a typing indicator interval that continues until cleared
+     * @returns NodeJS.Timeout that can be cleared to stop typing
+     */
+    private startTypingInterval(channel: TextBasedChannel): NodeJS.Timeout {
+        // Send initial typing indicator
+        if (this.canShowTyping(channel)) {
+            void channel.sendTyping().catch((error: Error) => {
+                logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
+            });
+        }
+
+        // Continue showing typing every 8 seconds (Discord's typing timeout is 10 seconds)
+        return setInterval(() => {
+            if (this.canShowTyping(channel)) {
+                void channel.sendTyping().catch((error: Error) => {
+                    logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
+                });
+            }
+        }, 8000);
+    }
+
+    /**
+     * Type guard for channels that support typing indicators
+     */
+    private canShowTyping(channel: TextBasedChannel): channel is TypingCapableChannel {
+        return 'sendTyping' in channel;
     }
 
     /**

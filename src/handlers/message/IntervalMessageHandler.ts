@@ -1,4 +1,4 @@
-import { TextChannel } from "discord.js";
+import { TextChannel, TextBasedChannel } from "discord.js";
 import { GroqHandler } from "../../groqApi";
 import { ContextBuilder } from "./ContextBuilder";
 import { ChannelCacheManager } from "../cache/ChannelCacheManager";
@@ -7,6 +7,13 @@ import * as fs from "fs/promises";
 import * as path from "path";
 
 const logger = createLogger("IntervalMessageHandler");
+
+/**
+ * Type for channels that support typing indicators
+ */
+type TypingCapableChannel = TextBasedChannel & {
+    sendTyping: () => Promise<void>;
+};
 
 interface IntervalConfig {
     prompt: string;
@@ -104,9 +111,15 @@ export class IntervalMessageHandler {
             return;
         }
 
+        // Start typing indicator
+        let typingInterval: NodeJS.Timeout | undefined;
+
         try {
             // Build context from recent messages
             const context = await this.contextBuilder.buildContext(cache, null);
+
+            // Start typing just before generating response
+            typingInterval = this.startTypingInterval(channel);
 
             // Generate an interjection based on the conversation context
             const response = await this.groqHandler.generateResponse({
@@ -116,6 +129,12 @@ export class IntervalMessageHandler {
                     name: channel.client.user?.username || "SmolBot"
                 }
             }, context);
+
+            // Clear typing before sending
+            if (typingInterval) {
+                clearInterval(typingInterval);
+                typingInterval = undefined;
+            }
 
             // Send the interjection
             const sentMessage = await channel.send(response);
@@ -136,11 +155,43 @@ export class IntervalMessageHandler {
             }, "Successfully sent interval message");
 
         } catch (error) {
+            // Ensure typing is cleared on error
+            if (typingInterval) {
+                clearInterval(typingInterval);
+            }
             logger.error({ 
                 error, 
                 channelId: channel.id 
             }, "Failed to generate or send interjection");
         }
+    }
+
+    /**
+     * Starts a typing indicator interval that continues until cleared
+     */
+    private startTypingInterval(channel: TextChannel): NodeJS.Timeout {
+        // Send initial typing indicator
+        if ('sendTyping' in channel) {
+            void channel.sendTyping().catch((error: Error) => {
+                logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
+            });
+        }
+
+        // Continue showing typing every 8 seconds (Discord's typing timeout is 10 seconds)
+        return setInterval(() => {
+            if ('sendTyping' in channel) {
+                void channel.sendTyping().catch((error: Error) => {
+                    logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
+                });
+            }
+        }, 8000);
+    }
+
+    /**
+     * Checks if a channel supports typing indicators
+     */
+    private canShowTyping(channel: TextChannel): boolean {
+        return 'sendTyping' in channel;
     }
 
     /**
