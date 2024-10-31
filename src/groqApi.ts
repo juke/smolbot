@@ -13,6 +13,7 @@ const logger = createLogger("GroqAPI");
 interface ModelConfig {
     primary: string;
     fallback: string;
+    instantFallback: string;
     maxRetries: number;
 }
 
@@ -42,11 +43,13 @@ export class GroqHandler {
             chat: {
                 primary: "llama-3.2-90b-text-preview",
                 fallback: "llama-3.1-70b-versatile",
+                instantFallback: "llama-3.1-8b-instant",
                 maxRetries: 3
             },
             vision: {
                 primary: "llama-3.2-90b-vision-preview",
                 fallback: "llama-3.2-11b-vision-preview",
+                instantFallback: "", // Vision models don't have instant fallback
                 maxRetries: 3
             }
         };
@@ -73,13 +76,48 @@ export class GroqHandler {
     }
 
     /**
-     * Attempts to execute a Groq API call with retries and fallback
+     * Attempts to execute a Groq API call with retries and fallbacks
      */
     private async executeWithFallback<T>(
         operation: (model: string) => Promise<T>,
         config: ModelConfig,
         context: string
     ): Promise<T> {
+        // If instant fallback flag is set, use instant model immediately
+        if (process.env.USE_INSTANT_FALLBACK === "true" && config.instantFallback) {
+            try {
+                return await this.executeWithRateLimit(
+                    () => operation(config.instantFallback),
+                    context
+                );
+            } catch (error) {
+                logger.error({ 
+                    error, 
+                    model: config.instantFallback,
+                    context 
+                }, "Error with instant fallback model");
+                throw error;
+            }
+        }
+
+        // If regular fallback flag is set, use fallback model
+        if (process.env.USE_FALLBACK_MODEL === "true") {
+            try {
+                return await this.executeWithRateLimit(
+                    () => operation(config.fallback),
+                    context
+                );
+            } catch (error) {
+                logger.error({ 
+                    error, 
+                    model: config.fallback,
+                    context 
+                }, "Error with fallback model");
+                throw error;
+            }
+        }
+
+        // Otherwise use normal fallback logic
         let lastError: unknown;
         
         // Try primary model with retries
@@ -120,6 +158,31 @@ export class GroqHandler {
                     attempt,
                     context 
                 }, "Fallback model attempt failed");
+            }
+        }
+
+        // Try instant fallback as last resort for text models
+        if (config.instantFallback) {
+            for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
+                try {
+                    logger.info({ 
+                        model: config.instantFallback,
+                        attempt,
+                        context 
+                    }, "Attempting instant fallback model");
+                    return await this.executeWithRateLimit(
+                        () => operation(config.instantFallback),
+                        context
+                    );
+                } catch (error) {
+                    lastError = error;
+                    logger.warn({ 
+                        error,
+                        model: config.instantFallback,
+                        attempt,
+                        context 
+                    }, "Instant fallback model attempt failed");
+                }
             }
         }
 
