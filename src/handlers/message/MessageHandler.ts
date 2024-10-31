@@ -78,7 +78,7 @@ export class MessageHandler {
             );
             this.emojiManager = new EmojiManager();
             this.interactionQueue = new BotInteractionQueue({
-                minDelayMs: 2000
+                minDelayMs: 1500
             });
 
             this.initialized = true;
