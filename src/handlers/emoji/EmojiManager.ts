@@ -65,8 +65,8 @@ export class EmojiManager {
     public replaceEmojiNames(text: string): string {
         let processedText = text;
         
-        // Enhanced pattern to catch more emoji formats
-        const emojiPattern = /(?:<a?:[^:]+:\d+>)|(?::[^:\s]+:)|(?<![@<\w])\b([a-zA-Z0-9_]+)\b(?![@>\w])/g;
+        // Enhanced pattern to catch all emoji formats including spaced versions
+        const emojiPattern = /(?:<a?:[^:]+:\d+>)|(?:\s?:[^:\s]+:\s?)|(?<![@<\w])\b([a-zA-Z0-9_]+)\b(?![@>\w])/g;
         
         processedText = processedText.replace(emojiPattern, (match, bareWord) => {
             // Handle already formatted emojis
@@ -83,15 +83,22 @@ export class EmojiManager {
                 return match;
             }
             
-            // Handle :emoji: format
-            if (match.startsWith(":") && match.endsWith(":")) {
-                const name = match.replace(/^:|:$/g, "").trim().toLowerCase();
+            // Handle :emoji: format (now with optional spaces)
+            if (match.includes(":")) {
+                // Clean up the match by removing spaces and extracting the name
+                const name = match.trim().replace(/^:|\s|:$/g, "").toLowerCase();
                 const emojiInfo = this.emojiCache.get(name);
                 
                 if (emojiInfo) {
+                    logger.debug({ 
+                        originalFormat: match,
+                        cleanedName: name,
+                        formatted: emojiInfo.formatted
+                    }, "Converted :emoji: format to proper format");
                     return emojiInfo.formatted;
                 }
-                return match;
+                // Only return the original match if it's a properly formatted :emoji:
+                return match.trim().match(/^:[^:\s]+:$/) ? match : name;
             }
             
             // Handle bare word format (potential emoji name without colons)
@@ -115,6 +122,24 @@ export class EmojiManager {
                 cacheSize: this.emojiCache.size,
                 availableEmojis: Array.from(this.emojiCache.keys())
             }, "Emoji lookup attempt");
+            
+            return match;
+        });
+
+        // Second pass to catch any remaining :emoji: formats that might have been missed
+        const remainingEmojiPattern = /:([\w]+):/g;
+        processedText = processedText.replace(remainingEmojiPattern, (match, name) => {
+            const normalizedName = name.toLowerCase();
+            const emojiInfo = this.emojiCache.get(normalizedName);
+            
+            if (emojiInfo) {
+                logger.debug({ 
+                    match,
+                    normalizedName,
+                    formatted: emojiInfo.formatted
+                }, "Caught remaining emoji in second pass");
+                return emojiInfo.formatted;
+            }
             
             return match;
         });

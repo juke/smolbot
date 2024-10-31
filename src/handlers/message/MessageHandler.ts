@@ -123,20 +123,21 @@ export class MessageHandler {
                 channelId: message.channelId
             }, "Processing new message");
 
-            // Check if this is a bot interaction
-            const isMentioned = message.mentions.has(client.user!.id);
-            const isReplyToBot = message.reference && 
-                (await message.fetchReference().catch(() => null))?.author.id === client.user!.id;
+            // Cache all messages first
+            await this.processNormalMessage(message);
 
+            // Check if message is a bot interaction
+            const isMentioned = message.mentions.users.has(client.user?.id ?? "");
+            const isReplyToBot = message.reference?.messageId && 
+                (await message.channel.messages.fetch(message.reference.messageId))
+                    .author.id === client.user?.id;
+
+            // Then handle bot interactions if needed
             if (isMentioned || isReplyToBot) {
-                // Queue bot interactions
                 await this.interactionQueue.enqueue(async () => {
                     await this.sendTypingIndicator(message.channel);
                     await this.botMentionHandler.handleMention(message);
                 });
-            } else {
-                // Process normal messages immediately for caching
-                await this.processNormalMessage(message);
             }
         } catch (error) {
             logger.error({ error, messageId }, "Error in processMessage");
