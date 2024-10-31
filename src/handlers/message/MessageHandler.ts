@@ -59,8 +59,7 @@ export class MessageHandler {
         this.emojiManager = new EmojiManager();
 
         this.interactionQueue = new BotInteractionQueue({
-            maxConcurrent: 3,
-            minDelayMs: 250
+            minDelayMs: 2000
         });
 
         // Initialize emoji system
@@ -140,10 +139,13 @@ export class MessageHandler {
 
             // Then handle bot interactions if needed
             if (isMentioned || isReplyToBot) {
-                await this.interactionQueue.enqueue(async () => {
-                    await this.sendTypingIndicator(message.channel);
-                    await this.botMentionHandler.handleMention(message);
-                });
+                await this.interactionQueue.enqueue(
+                    async () => {
+                        await this.botMentionHandler.handleMention(message);
+                    },
+                    message.channel,
+                    1
+                );
             }
         } catch (error) {
             logger.error({ error, messageId }, "Error in processMessage");

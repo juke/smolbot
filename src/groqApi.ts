@@ -19,112 +19,7 @@ interface ModelConfig {
 }
 
 /**
- * Manages API request rate limiting
- */
-class RequestRateLimiter {
-    private requestsThisMinute: number = 0;
-    private minuteStartTime: number;
-    private readonly maxRequestsPerMinute: number;
-    private requestQueue: Array<{
-        resolve: () => void;
-        reject: (error: Error) => void;
-        timestamp: number;
-    }> = [];
-    private processingQueue: boolean = false;
-
-    constructor(maxRequestsPerMinute: number) {
-        this.maxRequestsPerMinute = maxRequestsPerMinute;
-        this.minuteStartTime = Date.now();
-        
-        logger.info({ 
-            maxRequestsPerMinute,
-        }, "Rate limiter initialized");
-    }
-
-    /**
-     * Waits for a request slot to become available
-     * @throws Error if waiting time exceeds 5 minutes
-     */
-    public async waitForToken(): Promise<void> {
-        this.checkMinuteReset();
-        
-        if (this.requestsThisMinute < this.maxRequestsPerMinute) {
-            this.requestsThisMinute++;
-            return Promise.resolve();
-        }
-
-        return new Promise((resolve, reject) => {
-            this.requestQueue.push({
-                resolve,
-                reject,
-                timestamp: Date.now()
-            });
-
-            // Start processing queue if not already running
-            this.processQueue().catch(error => {
-                logger.error({ error }, "Error processing rate limit queue");
-            });
-        });
-    }
-
-    /**
-     * Processes the request queue
-     */
-    private async processQueue(): Promise<void> {
-        if (this.processingQueue) return;
-        this.processingQueue = true;
-
-        try {
-            while (this.requestQueue.length > 0) {
-                this.checkMinuteReset();
-
-                if (this.requestsThisMinute >= this.maxRequestsPerMinute) {
-                    const timeUntilReset = 60000 - (Date.now() - this.minuteStartTime);
-                    await new Promise(resolve => setTimeout(resolve, timeUntilReset));
-                    continue;
-                }
-
-                const request = this.requestQueue[0];
-                const waitTime = Date.now() - request.timestamp;
-
-                if (waitTime >= 300000) { // 5 minutes
-                    request.reject(new Error("Rate limit exceeded: Maximum wait time reached"));
-                    this.requestQueue.shift();
-                    continue;
-                }
-
-                this.requestsThisMinute++;
-                request.resolve();
-                this.requestQueue.shift();
-            }
-        } finally {
-            this.processingQueue = false;
-        }
-    }
-
-    /**
-     * Resets request count if minute has elapsed
-     */
-    private checkMinuteReset(): void {
-        const now = Date.now();
-        const timeElapsed = now - this.minuteStartTime;
-        
-        if (timeElapsed >= 60000) { // 60 seconds in milliseconds
-            const minutesElapsed = Math.floor(timeElapsed / 60000);
-            this.requestsThisMinute = 0;
-            this.minuteStartTime = now - (timeElapsed % 60000);
-            
-            logger.debug({ 
-                minutesElapsed,
-                requestsReset: true,
-                newMinuteStartTime: new Date(this.minuteStartTime).toISOString()
-            }, "Request counter reset");
-        }
-    }
-}
-
-/**
- * Handles Groq API interactions with rate limiting and fallback handling
+ * Handles Groq API interactions with fallback handling
  */
 export class GroqHandler {
     private groq: Groq;
@@ -134,12 +29,10 @@ export class GroqHandler {
     };
     private emojiManager: EmojiManager;
     private systemMessage: string = "";
-    private rateLimiter: RequestRateLimiter;
 
     constructor(apiKey: string) {
         this.groq = new Groq({ apiKey });
         this.emojiManager = new EmojiManager();
-        this.rateLimiter = new RequestRateLimiter(50);
         this.modelConfigs = {
             chat: {
                 primary: "llama-3.2-90b-text-preview",
@@ -291,35 +184,34 @@ That's a cute cat!`;
      */
     public async performLightAnalysis(imageUrl: string): Promise<string> {
         try {
-            return await this.executeWithRateLimit(
-                async () => {
-                    const completion = await this.groq.chat.completions.create({
-                        messages: [
-                            {
-                                role: "user",
-                                content: [
-                                    {
-                                        type: "text",
-                                        text: "Provide a brief, 1-2 sentence description (max 25 words) of this image. Focus on the main subject and notable visual elements.",
+            const completion = await this.executeWithFallback(
+                async (model) => this.groq.chat.completions.create({
+                    messages: [
+                        {
+                            role: "user",
+                            content: [
+                                {
+                                    type: "text",
+                                    text: "Provide a brief, 1-2 sentence description (max 25 words) of this image. Focus on the main subject and notable visual elements.",
+                                },
+                                {
+                                    type: "image_url",
+                                    image_url: {
+                                        url: imageUrl,
                                     },
-                                    {
-                                        type: "image_url",
-                                        image_url: {
-                                            url: imageUrl,
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                        model: "llama-3.2-11b-vision-preview",
-                        max_tokens: 128,
-                        temperature: 0.7,
-                    });
-
-                    return completion.choices[0]?.message?.content || "Unable to analyze image";
-                },
+                                },
+                            ],
+                        },
+                    ],
+                    model: "llama-3.2-11b-vision-preview",
+                    max_tokens: 128,
+                    temperature: 0.7,
+                }),
+                this.modelConfigs.vision,
                 "performLightAnalysis"
             );
+
+            return completion.choices[0]?.message?.content || "Unable to analyze image";
         } catch (error) {
             logger.error({ error, imageUrl }, "Error performing light analysis");
             return "Error analyzing image";
@@ -370,7 +262,7 @@ That's a cute cat!`;
     }
 
     /**
-     * Executes an operation with rate limiting and fallback handling
+     * Executes an operation with fallback handling
      */
     private async executeWithFallback<T>(
         operation: (model: string) => Promise<T>,
@@ -378,7 +270,6 @@ That's a cute cat!`;
         operationName: string
     ): Promise<T> {
         let lastError: Error | undefined;
-        let attempts = 0;
 
         const models = [
             config.primary,
@@ -388,32 +279,23 @@ That's a cute cat!`;
 
         for (const model of models) {
             try {
-                await this.rateLimiter.waitForToken();
                 return await operation(model);
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error("Unknown error");
-                logger.warn({ error: lastError, model, attempt: ++attempts }, 
+                
+                // If it's a rate limit error, immediately try fallback
+                if (lastError.message.toLowerCase().includes("rate limit")) {
+                    logger.warn({ error: lastError, model }, 
+                        `${operationName} hit rate limit, trying fallback model`);
+                    continue;
+                }
+                
+                // For other errors, log and try next model
+                logger.warn({ error: lastError, model }, 
                     `${operationName} failed, trying next model`);
             }
         }
 
         throw lastError || new Error(`All ${operationName} attempts failed`);
-    }
-
-    /**
-     * Executes an operation with rate limiting
-     */
-    private async executeWithRateLimit<T>(
-        operation: () => Promise<T>,
-        operationName: string
-    ): Promise<T> {
-        try {
-            await this.rateLimiter.waitForToken();
-            return await operation();
-        } catch (error) {
-            const typedError = error instanceof Error ? error : new Error("Unknown error");
-            logger.error({ error: typedError }, `${operationName} failed`);
-            throw typedError;
-        }
     }
 } 
