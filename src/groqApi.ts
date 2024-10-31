@@ -156,11 +156,11 @@ That's a cute cat!`;
                         },
                         { 
                             role: "user", 
-                            content: `\n=== Bot's Conversation View ===\n\n${context}\n\nCurrent Message:\n${currentMessage.content}\n\n===========================\n`
+                            content: `${context}\n\nRespond to the current message marked with >>>`
                         }
                     ],
                     model,
-                    temperature: 0.7,
+                    temperature: 0.8,
                     max_tokens: 1024,
                     stop: ["[User]", "[SmolBot]", "[Image]"]
                 }),

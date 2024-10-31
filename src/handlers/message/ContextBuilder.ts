@@ -35,13 +35,35 @@ export class ContextBuilder {
             .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
             .slice(-contextSize);
 
-        // Optionally exclude the current message from context
-        if (excludeCurrentMessage && currentMessage) {
+        // If there's a current message, ensure it's at the end
+        if (currentMessage && !excludeCurrentMessage) {
+            // Remove current message if it exists in recent messages
             recentMessages = recentMessages.filter(msg => msg.id !== currentMessage.id);
+            
+            // Add current message as a cached message format
+            const currentCached: CachedMessage = {
+                id: currentMessage.id,
+                content: currentMessage.content,
+                authorId: currentMessage.author.id,
+                authorName: currentMessage.member?.displayName || currentMessage.author.username,
+                timestamp: currentMessage.createdAt,
+                images: [], // Images handled separately
+                referencedMessage: currentMessage.reference?.messageId
+            };
+            
+            // Add current message at the end
+            recentMessages.push(currentCached);
         }
-        
+
+        // Format all messages
         for (const msg of recentMessages) {
-            const formattedMessage = await this.formatMessage(msg, currentMessage);
+            // Mark only the last message as current
+            const isCurrentMessage = msg.id === currentMessage?.id;
+            const formattedMessage = await this.formatMessage(msg, currentMessage, isCurrentMessage);
+            
+            if (isCurrentMessage) {
+                contextMessages.push("\n=== Current Message ===");
+            }
             contextMessages.push(formattedMessage);
         }
 
@@ -53,7 +75,8 @@ export class ContextBuilder {
      */
     private async formatMessage(
         msg: CachedMessage, 
-        currentMessage: Message | null
+        currentMessage: Message | null,
+        isCurrentMessage = false
     ): Promise<string> {
         let messageContent = msg.content;
 
@@ -104,7 +127,6 @@ export class ContextBuilder {
             }
         }
 
-        // Properly check for bot messages using the environment variable
         const botClientId = process.env.DISCORD_CLIENT_ID;
         if (!botClientId) {
             logger.warn("DISCORD_CLIENT_ID not set in environment variables");
@@ -113,8 +135,14 @@ export class ContextBuilder {
         const isSmolBot = msg.authorId === botClientId;
         const prefix = isSmolBot ? "[SmolBot]" : "[User]";
 
-        // Format the message line with proper mention syntax
-        const messageLine = `${prefix} User Tag: <@${msg.authorId}> (${msg.authorName}): ${messageContent}`;
+        // Format user identifier consistently
+        const userIdentifier = `<@${msg.authorId}> (${msg.authorName})`;
+
+        // Add current message marker
+        const messagePrefix = isCurrentMessage ? ">>> " : "";
+        
+        // Format the message line
+        const messageLine = `${prefix} ${userIdentifier}: ${messagePrefix}${messageContent}`;
         const imageLines = msg.images.map(img => `[Image: ${img.lightAnalysis}]`);
 
         return [messageLine, ...imageLines].join("\n");
