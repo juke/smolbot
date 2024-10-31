@@ -272,10 +272,11 @@ That's a cute cat!`;
         let lastError: Error | undefined;
         let rateLimitedModels = new Set<string>();
 
+        // Always include all models in the fallback chain
         const models = [
             config.primary,
-            ...(process.env.USE_FALLBACK_MODEL ? [config.fallback] : []),
-            ...(process.env.USE_INSTANT_FALLBACK ? [config.instantFallback] : [])
+            config.fallback,
+            config.instantFallback
         ];
 
         for (const model of models) {
