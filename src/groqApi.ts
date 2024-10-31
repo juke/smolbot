@@ -3,6 +3,8 @@ import { createLogger } from "./utils/logger";
 import { ImageAnalysis, EmojiInfo } from "./types";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { EmojiManager } from "./handlers/emoji/EmojiManager";
+import { Client } from "discord.js";
 
 const logger = createLogger("GroqAPI");
 
@@ -130,21 +132,19 @@ export class GroqHandler {
         chat: ModelConfig;
         vision: ModelConfig;
     };
-    private emojiList: EmojiInfo[] = [];
+    private emojiManager: EmojiManager;
+    private systemMessage: string = "";
     private rateLimiter: RequestRateLimiter;
 
     constructor(apiKey: string) {
-        this.groq = new Groq({
-            apiKey,
-        });
-
-        this.rateLimiter = new RequestRateLimiter(30);
-
+        this.groq = new Groq({ apiKey });
+        this.emojiManager = new EmojiManager();
+        this.rateLimiter = new RequestRateLimiter(50);
         this.modelConfigs = {
             chat: {
-                primary: "mixtral-8x7b-32768",
-                fallback: "llama-70b-4096",
-                instantFallback: "llama-13b-4096",
+                primary: "llama-3.2-90b-text-preview",
+                fallback: "llama-3.1-70b-versatile",
+                instantFallback: "llama-3.1-8b-instant",
                 maxRetries: 3
             },
             vision: {
@@ -154,45 +154,45 @@ export class GroqHandler {
                 maxRetries: 2
             }
         };
+        // Load system message immediately
+        void this.loadSystemMessage();
     }
 
     /**
-     * Updates the available emoji list for the bot
+     * Updates emoji list and refreshes system message
      */
-    public updateEmojiList(emojis: EmojiInfo[]): void {
-        this.emojiList = emojis;
-        logger.debug({ emojiCount: emojis.length }, "Updated emoji list");
+    public updateEmojiList(client: Client): void {
+        this.emojiManager.updateEmojiCache(client);
+        void this.loadSystemMessage();
     }
 
     /**
-     * Generates the system message with emoji information
+     * Loads and formats system message with current emoji list
      */
-    private async getSystemMessage(): Promise<string> {
+    private async loadSystemMessage(): Promise<string> {
         try {
-            const systemMessagesPath = path.join(__dirname, "config", "system-messages.json");
-            const systemMessages = JSON.parse(await fs.readFile(systemMessagesPath, "utf-8")) as {
-                personality: string;
-                instructions: string[];
-                emojiInstructions: string[];
-                examples: {
-                    incorrect: string;
-                    correct: string;
-                };
-            };
+            const systemMessages = await fs.readFile(
+                path.join(__dirname, "config", "system-messages.json"), 
+                "utf-8"
+            );
             
-            const emojiList = this.emojiList.length > 0
-                ? `\n${systemMessages.emojiInstructions[0]}\n${this.emojiList.map(emoji => 
-                    `  - ${emoji.formatted} (${emoji.name})`).join("\n")}\n${
-                    systemMessages.emojiInstructions.slice(1).join("\n")}`
-                : "";
+            const messages = JSON.parse(systemMessages);
+            const emojiList = this.emojiManager.getAvailableEmojis()
+                .map(emoji => `  ${emoji}`)
+                .join("\n");
+            
+            // Combine personality and instructions with emoji list
+            this.systemMessage = `${messages.personality}\n\n${messages.instructions.join("\n")}`
+                .replace("{{EMOJI_LIST}}", emojiList);
 
-            return `Personality:\n${systemMessages.personality}\n\nInstructions:\n${
-                systemMessages.instructions.map((instruction: string) => `- ${instruction}`).join("\n")
-            }${emojiList}\n\nExample - DO NOT respond like this:\n${
-                systemMessages.examples.incorrect}\n\nInstead, respond like this:\n${
-                systemMessages.examples.correct}`;
+            logger.debug({ 
+                emojiCount: this.emojiManager.getAvailableEmojis().length,
+                systemMessageLength: this.systemMessage.length
+            }, "System message updated");
+
+            return this.systemMessage;
         } catch (error) {
-            logger.error({ error }, "Error loading system messages, falling back to defaults");
+            logger.error({ error }, "Error loading system messages");
             return this.getFallbackSystemMessage();
         }
     }
@@ -201,16 +201,16 @@ export class GroqHandler {
      * Fallback system message when JSON cannot be loaded
      */
     private getFallbackSystemMessage(): string {
-        // Move the original hardcoded message here as fallback
-        const emojiInstructions = this.emojiList.length > 0
+        const availableEmojis = this.emojiManager.getAvailableEmojis();
+        const emojiInstructions = availableEmojis.length > 0
             ? `\nAvailable Emojis:
 - The following emojis/emotes are available for use in your responses:
-${this.emojiList.map(emoji => `  - ${emoji.formatted} (${emoji.name})`).join("\n")}
-- When using emojis/emotes in your responses, use their exact formatted version
-- Static emojis/emotes format: <:name:id>
-- Animated emojis/emotes format: <a:name:id>
-- The formatted versions are provided above, use them exactly as shown
-- Do not try to create emoji/emotes formats manually, only use the provided formatted versions`
+${availableEmojis.map(emoji => `  - ${emoji}`).join("\n")}
+- Use emojis in the format :emojiname: - they will be automatically formatted
+- Only use emojis from the available list above
+- The bot will automatically convert :emojiname: to the proper Discord format
+- Do not try to format emojis manually with < > symbols
+- If an emoji name is not in the list, it won't be converted`
             : "";
 
         return `Personality:
@@ -245,62 +245,42 @@ That's a cute cat!`;
     }
 
     /**
-     * Generates a text response based on conversation context
-     * @param currentMessage The current message to respond to
-     * @param previousContext Previous conversation context
-     * @param detailedAnalysis Optional detailed image analysis
-     * @returns AI-generated response
+     * Generates a response with proper emoji formatting
      */
-    public async generateResponse(
-        currentMessage: {
-            content: string;
-            author: {
-                id: string;
-                name: string;
-            };
-            referencedMessage?: string;
-        },
-        previousContext: string,
-        detailedAnalysis?: string
-    ): Promise<string> {
+    public async generateResponse(currentMessage: any, context: string): Promise<string> {
         try {
+            // Ensure system message is loaded
+            if (!this.systemMessage) {
+                await this.loadSystemMessage();
+            }
+
             const completion = await this.executeWithFallback(
                 async (model) => this.groq.chat.completions.create({
                     messages: [
-                        {
-                            role: "system",
-                            content: await this.getSystemMessage(),
+                        { 
+                            role: "system", 
+                            content: this.systemMessage 
                         },
-                        {
-                            role: "system",
-                            content: "CONVERSATION HISTORY (for context):\n" + previousContext,
-                        },
-                        {
-                            role: "system",
-                            content: [
-                                "CURRENT MESSAGE TO RESPOND TO:",
-                                `User ${currentMessage.author.name} (<@${currentMessage.author.id}>) ${
-                                    currentMessage.referencedMessage ? "is replying to a previous message" : "has directly mentioned you"
-                                }`,
-                                `Their message is: "${currentMessage.content}"`,
-                                detailedAnalysis ? `\nImage Context: ${detailedAnalysis}` : "",
-                                "\nPlease respond directly to this message while keeping the conversation history in mind.",
-                                "Focus primarily on the current message but reference previous context when relevant."
-                            ].filter(Boolean).join("\n")
-                        },
+                        { 
+                            role: "user", 
+                            content: `\n=== Bot's Conversation View ===\n\n${context}\n\nCurrent Message:\n${currentMessage.content}\n\n===========================\n`
+                        }
                     ],
                     model,
-                    max_tokens: 256,
                     temperature: 0.7,
+                    max_tokens: 1024,
+                    stop: ["[User]", "[SmolBot]", "[Image]"]
                 }),
                 this.modelConfigs.chat,
                 "generateResponse"
             );
 
-            return completion.choices[0]?.message?.content || "I'm having trouble forming a response.";
+            const response = completion.choices[0]?.message?.content || "";
+            return this.emojiManager.formatText(response);
+
         } catch (error) {
-            logger.error({ error, currentMessage }, "Error generating text response after all attempts");
-            return "I encountered an error while processing your message.";
+            logger.error({ error }, "Error generating response");
+            return "sorry, i'm having trouble thinking right now :sadge:";
         }
     }
 

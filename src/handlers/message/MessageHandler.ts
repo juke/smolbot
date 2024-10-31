@@ -31,11 +31,14 @@ export class MessageHandler {
     private readonly intervalHandler: IntervalMessageHandler;
     private readonly emojiManager: EmojiManager;
     private readonly interactionQueue: BotInteractionQueue;
+    private readonly groqHandler: GroqHandler;
 
     constructor(groqHandler: GroqHandler) {
         if (MessageHandler.instance) {
             throw new Error("MessageHandler is already instantiated");
         }
+
+        this.groqHandler = groqHandler;
 
         this.cacheManager = new ChannelCacheManager({ maxSize: 20 });
         this.imageProcessor = new ImageProcessor(groqHandler);
@@ -53,12 +56,15 @@ export class MessageHandler {
             this.cacheManager
         );
 
-        this.emojiManager = new EmojiManager(groqHandler);
+        this.emojiManager = new EmojiManager();
 
         this.interactionQueue = new BotInteractionQueue({
             maxConcurrent: 3,
             minDelayMs: 250
         });
+
+        // Initialize emoji system
+        this.updateEmojis = this.updateEmojis.bind(this);
 
         MessageHandler.instance = this;
     }
@@ -193,10 +199,13 @@ export class MessageHandler {
     }
 
     /**
-     * Updates emoji cache when needed
+     * Updates emoji cache and refreshes system message
      */
     public updateEmojis(client: Client): void {
         this.emojiManager.updateEmojiCache(client);
+        // Update GroqHandler's emoji list as well
+        this.groqHandler.updateEmojiList(client);
+        logger.info("Emoji cache updated");
     }
 }
 
