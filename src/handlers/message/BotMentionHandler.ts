@@ -32,16 +32,38 @@ export class BotMentionHandler {
         }
 
         try {
-            const context = await this.contextBuilder.buildContext(cache, message, 20);
+            // Get previous context without the current message
+            const previousContext = await this.contextBuilder.buildContext(cache, message, 20, true);
             const detailedAnalysis = await this.getDetailedImageAnalysis(message, cache);
             
-            const currentMessageContext = `${context}\n\n[User] <@${message.author.id}> (${
-                message.member?.displayName || message.author.username
-            }): ${message.content}`;
+            // Format the current message separately
+            const currentMessage = {
+                content: message.content,
+                author: {
+                    id: message.author.id,
+                    name: message.member?.displayName || message.author.username
+                },
+                referencedMessage: message.reference?.messageId
+            };
+            
+            // Combine previous context and detailed analysis into a single context string
+            const fullContext = `${previousContext}${
+                detailedAnalysis ? `\n\n[Detailed Analysis: ${detailedAnalysis}]` : ""
+            }`;
+
+            // Log what the bot sees
+            logger.info({
+                messageId: message.id,
+                context: {
+                    previousMessages: previousContext,
+                    currentMessage: `[User] <@${currentMessage.author.id}> (${currentMessage.author.name}): ${currentMessage.content}`,
+                    detailedAnalysis: detailedAnalysis || "No image analysis"
+                }
+            }, "Bot's view of conversation");
             
             const response = await this.groqHandler.generateResponse(
-                message.content,
-                `${currentMessageContext}\n${detailedAnalysis ? `[Detailed Analysis: ${detailedAnalysis}]` : ""}`
+                currentMessage,
+                fullContext
             );
 
             const botResponse = await message.reply(response);

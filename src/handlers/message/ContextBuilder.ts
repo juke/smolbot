@@ -83,8 +83,14 @@ export class ContextBuilder {
                             referencedMessage: fetchedMessage.reference?.messageId,
                         });
 
+                        // Fix: Include author information when formatting referenced message
                         messageContent = await this.formatReferencedMessage(
-                            { content: fetchedMessage.content, images },
+                            {
+                                content: fetchedMessage.content,
+                                images,
+                                authorId: fetchedMessage.author.id,
+                                authorName: fetchedMessage.member?.displayName || fetchedMessage.author.username
+                            },
                             msg.content
                         );
                     }
@@ -118,11 +124,11 @@ export class ContextBuilder {
      * Formats a referenced message with its content and images
      */
     private async formatReferencedMessage(
-        referencedMsg: { content: string; images?: { lightAnalysis: string }[] },
+        referencedMsg: { content: string; images?: { lightAnalysis: string }[]; authorId: string; authorName: string },
         originalContent: string
     ): Promise<string> {
         // Remove extra quotes and simplify the reply format
-        let formattedReference = `[Replying to message: ${referencedMsg.content}`;
+        let formattedReference = `[Replying to message from user <@${referencedMsg.authorId}> (${referencedMsg.authorName}): ${referencedMsg.content}`;
         
         if (referencedMsg.images?.length) {
             const imageDescriptions = referencedMsg.images

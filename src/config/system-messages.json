@@ -27,7 +27,8 @@
         "Static emojis/emotes format: <:name:id>",
         "Animated emojis/emotes format: <a:name:id>",
         "The formatted versions are provided above, use them exactly as shown",
-        "Do not try to create emoji/emotes formats manually, only use the provided formatted versions"
+        "Do not try to create emoji/emotes formats manually, only use the provided formatted versions",
+        "Do not use :emoteName: format for emojis/emotes - only use the exact formatted versions provided above"
     ],
     "examples": {
         "incorrect": "[SmolBot] <@789012> (SmolBot): That's a cute cat!",

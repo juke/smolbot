@@ -182,13 +182,22 @@ That's a cute cat!`;
 
     /**
      * Generates a text response based on conversation context
-     * @param userMessage The user's message
-     * @param context Previous conversation context
+     * @param currentMessage The current message to respond to
+     * @param previousContext Previous conversation context
+     * @param detailedAnalysis Optional detailed image analysis
      * @returns AI-generated response
      */
     public async generateResponse(
-        userMessage: string, 
-        context: string
+        currentMessage: {
+            content: string;
+            author: {
+                id: string;
+                name: string;
+            };
+            referencedMessage?: string;
+        },
+        previousContext: string,
+        detailedAnalysis?: string
     ): Promise<string> {
         try {
             const completion = await this.executeWithFallback(
@@ -199,12 +208,21 @@ That's a cute cat!`;
                             content: await this.getSystemMessage(),
                         },
                         {
-                            role: "user",
-                            content: context,
+                            role: "system",
+                            content: "CONVERSATION HISTORY (for context):\n" + previousContext,
                         },
                         {
                             role: "system",
-                            content: "The user is directly mentioning you in a new conversation or continuing an existing one.",
+                            content: [
+                                "CURRENT MESSAGE TO RESPOND TO:",
+                                `User ${currentMessage.author.name} (<@${currentMessage.author.id}>) ${
+                                    currentMessage.referencedMessage ? "is replying to a previous message" : "has directly mentioned you"
+                                }`,
+                                `Their message is: "${currentMessage.content}"`,
+                                detailedAnalysis ? `\nImage Context: ${detailedAnalysis}` : "",
+                                "\nPlease respond directly to this message while keeping the conversation history in mind.",
+                                "Focus primarily on the current message but reference previous context when relevant."
+                            ].filter(Boolean).join("\n")
                         },
                     ],
                     model,
@@ -217,7 +235,7 @@ That's a cute cat!`;
 
             return completion.choices[0]?.message?.content || "I'm having trouble forming a response.";
         } catch (error) {
-            logger.error({ error, userMessage }, "Error generating text response after all attempts");
+            logger.error({ error, currentMessage }, "Error generating text response after all attempts");
             return "I encountered an error while processing your message.";
         }
     }
