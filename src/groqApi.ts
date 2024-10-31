@@ -270,6 +270,7 @@ That's a cute cat!`;
         operationName: string
     ): Promise<T> {
         let lastError: Error | undefined;
+        let rateLimitedModels = new Set<string>();
 
         const models = [
             config.primary,
@@ -278,15 +279,22 @@ That's a cute cat!`;
         ];
 
         for (const model of models) {
+            // Skip models that are rate limited
+            if (rateLimitedModels.has(model)) {
+                logger.debug({ model }, `Skipping rate-limited model`);
+                continue;
+            }
+
             try {
                 return await operation(model);
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error("Unknown error");
                 
-                // If it's a rate limit error, immediately try fallback
+                // Check for rate limit error
                 if (lastError.message.toLowerCase().includes("rate limit")) {
+                    rateLimitedModels.add(model);
                     logger.warn({ error: lastError, model }, 
-                        `${operationName} hit rate limit, trying fallback model`);
+                        `${operationName}: Model rate limited, switching to next available model`);
                     continue;
                 }
                 
@@ -294,6 +302,11 @@ That's a cute cat!`;
                 logger.warn({ error: lastError, model }, 
                     `${operationName} failed, trying next model`);
             }
+        }
+
+        // If all models are rate limited, use a more specific error message
+        if (rateLimitedModels.size === models.length) {
+            throw new Error(`All models are currently rate limited for ${operationName}`);
         }
 
         throw lastError || new Error(`All ${operationName} attempts failed`);
