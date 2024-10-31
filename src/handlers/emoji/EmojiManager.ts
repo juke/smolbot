@@ -65,9 +65,11 @@ export class EmojiManager {
     public replaceEmojiNames(text: string): string {
         let processedText = text;
         
-        const emojiPattern = /(?:<a?:[^:]+:\d+>)|(?::[^:\s]+:)/g;
+        // Enhanced pattern to catch more emoji formats
+        const emojiPattern = /(?:<a?:[^:]+:\d+>)|(?::[^:\s]+:)|(?<![@<\w])\b([a-zA-Z0-9_]+)\b(?![@>\w])/g;
         
-        processedText = processedText.replace(emojiPattern, (match) => {
+        processedText = processedText.replace(emojiPattern, (match, bareWord) => {
+            // Handle already formatted emojis
             if (match.startsWith("<")) {
                 const formatted = match.match(/<(a?):([^:]+):(\d+)>/);
                 if (formatted) {
@@ -78,18 +80,38 @@ export class EmojiManager {
                         return emojiInfo.formatted;
                     }
                 }
+                return match;
             }
             
-            const name = match.replace(/^:|:$/g, "").trim().toLowerCase();
-            const emojiInfo = this.emojiCache.get(name);
+            // Handle :emoji: format
+            if (match.startsWith(":") && match.endsWith(":")) {
+                const name = match.replace(/^:|:$/g, "").trim().toLowerCase();
+                const emojiInfo = this.emojiCache.get(name);
+                
+                if (emojiInfo) {
+                    return emojiInfo.formatted;
+                }
+                return match;
+            }
             
-            if (emojiInfo) {
-                return emojiInfo.formatted;
+            // Handle bare word format (potential emoji name without colons)
+            if (bareWord) {
+                const normalizedName = bareWord.toLowerCase();
+                const emojiInfo = this.emojiCache.get(normalizedName);
+                
+                if (emojiInfo) {
+                    logger.debug({ 
+                        bareWord,
+                        normalizedName,
+                        formatted: emojiInfo.formatted
+                    }, "Converted bare word to emoji");
+                    return emojiInfo.formatted;
+                }
             }
             
             logger.debug({ 
-                emojiName: name, 
                 match,
+                bareWord,
                 cacheSize: this.emojiCache.size,
                 availableEmojis: Array.from(this.emojiCache.keys())
             }, "Emoji lookup attempt");
