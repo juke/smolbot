@@ -94,6 +94,11 @@ export class MessageHandler {
      * Processes an incoming message
      */
     private async processMessage(client: Client, message: Message): Promise<void> {
+        // Skip if message is from the bot itself
+        if (message.author.id === client.user?.id) {
+            return;
+        }
+
         const messageId = message.id;
 
         // Prevent duplicate processing
