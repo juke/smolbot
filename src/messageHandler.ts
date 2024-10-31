@@ -199,9 +199,73 @@ export class MessageHandler {
             
             // Handle message references/replies
             if (msg.referencedMessage) {
+                // First try to find in cache
                 const referencedMsg = cache.messages.find(m => m.id === msg.referencedMessage);
+                
                 if (referencedMsg) {
-                    messageContent = `[Replying to message: "${referencedMsg.content}"]: ${messageContent}`;
+                    messageContent = `[Replying to message: "${referencedMsg.content}"]: ${msg.content}`;
+                } else {
+                    // If not in cache, try to fetch from Discord API
+                    try {
+                        const fetchedMessage = await currentMessage.channel.messages.fetch(msg.referencedMessage);
+                        if (fetchedMessage) {
+                            messageContent = `[Replying to message: "${fetchedMessage.content}"]: ${msg.content}`;
+                            
+                            // Process any images in the fetched message
+                            const images: ImageAnalysis[] = [];
+                            for (const attachment of fetchedMessage.attachments.values()) {
+                                if (attachment.contentType?.startsWith("image/")) {
+                                    try {
+                                        logger.debug({ 
+                                            messageId: fetchedMessage.id,
+                                            imageUrl: attachment.url
+                                        }, "Analyzing image in referenced message");
+                                        
+                                        const lightAnalysis = await this.groqHandler.performLightAnalysis(attachment.url);
+                                        images.push({
+                                            url: attachment.url,
+                                            lightAnalysis,
+                                        });
+                                    } catch (error) {
+                                        logger.error({ 
+                                            error, 
+                                            messageId: fetchedMessage.id,
+                                            imageUrl: attachment.url 
+                                        }, "Error analyzing image in referenced message");
+                                    }
+                                }
+                            }
+                            
+                            // Create cached message with the analyzed images
+                            const cachedMessage: CachedMessage = {
+                                id: fetchedMessage.id,
+                                content: fetchedMessage.content, // Store raw content
+                                authorId: fetchedMessage.author.id,
+                                authorName: fetchedMessage.author.username,
+                                timestamp: fetchedMessage.createdAt,
+                                images,
+                                referencedMessage: fetchedMessage.reference?.messageId,
+                            };
+                            
+                            cache.messages.push(cachedMessage);
+                            logger.debug({ 
+                                messageId: fetchedMessage.id,
+                                imageCount: images.length
+                            }, "Cached referenced message with images from API");
+                            
+                            // Add image descriptions to the message content
+                            if (images.length > 0) {
+                                const imageDescriptions = images.map(img => `\n[Image: ${img.lightAnalysis}]`).join("");
+                                messageContent = `[Replying to message: "${fetchedMessage.content}${imageDescriptions}"]: ${msg.content}`;
+                            }
+                        }
+                    } catch (error) {
+                        logger.error({ 
+                            error, 
+                            referencedMessageId: msg.referencedMessage 
+                        }, "Failed to fetch referenced message");
+                        messageContent = `[Replying to unavailable message]: ${msg.content}`;
+                    }
                 }
             }
 
