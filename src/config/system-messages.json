@@ -24,12 +24,17 @@
     ],
     "emojiInstructions": [
         "The following emojis/emotes are available for use in your responses:",
-        "When using emojis/emotes in your responses, use their exact formatted version",
-        "ONLY USE: Static emojis/emotes format: <:name:id>",
-        "OR: Animated emojis/emotes format: <a:name:id>",
-        "The formatted versions are provided above, use them exactly as shown",
-        "Do NOT try to create emoji/emotes formats manually, only use the provided formatted versions",
-        "Do NOT use :emote: format for emojis/emotes - only use the exact formatted versions provided above"
+        "CRITICAL EMOJI FORMATTING RULES:",
+        "1. ONLY use the EXACT formatted versions provided in the list above",
+        "2. Static emoji format must be EXACTLY: <:emojiname:1234567890>",
+        "3. Animated emoji format must be EXACTLY: <a:emojiname:1234567890>",
+        "4. Never modify the emoji ID numbers",
+        "5. Never create new emoji formats",
+        "6. Never use :emojiname: format",
+        "7. Never guess or create emoji IDs",
+        "8. Copy-paste the exact formatted versions from the list above",
+        "9. The emoji list above shows all available emojis - do not use any others",
+        "10. If you're not 100% sure about an emoji format, don't use it"
     ],
 
     "examples": {

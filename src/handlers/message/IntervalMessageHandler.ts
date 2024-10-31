@@ -109,10 +109,13 @@ export class IntervalMessageHandler {
             const context = await this.contextBuilder.buildContext(cache, null);
 
             // Generate an interjection based on the conversation context
-            const response = await this.groqHandler.generateResponse(
-                `${this.config.prompt}\n\n${context}`,
-                context
-            );
+            const response = await this.groqHandler.generateResponse({
+                content: `${this.config.prompt}\n\n${context}`,
+                author: {
+                    id: channel.client.user?.id || "unknown",
+                    name: channel.client.user?.username || "SmolBot"
+                }
+            }, context);
 
             // Send the interjection
             const sentMessage = await channel.send(response);

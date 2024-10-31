@@ -10,9 +10,11 @@ const logger = createLogger("EmojiManager");
  */
 export class EmojiManager {
     private emojiCache: Map<string, EmojiInfo>;
+    private emojiIdCache: Map<string, EmojiInfo>;
 
     constructor(private groqHandler: GroqHandler) {
         this.emojiCache = new Map();
+        this.emojiIdCache = new Map();
     }
 
     /**
@@ -20,6 +22,7 @@ export class EmojiManager {
      */
     public updateEmojiCache(client: Client): void {
         this.emojiCache.clear();
+        this.emojiIdCache.clear();
         const emojis: EmojiInfo[] = [];
 
         client.guilds.cache.forEach(guild => {
@@ -33,27 +36,25 @@ export class EmojiManager {
                     };
                     
                     this.emojiCache.set(emoji.name, emojiInfo);
+                    this.emojiIdCache.set(emoji.id, emojiInfo);
                     emojis.push(emojiInfo);
                 }
             });
         });
 
-        // Update the GroqHandler with the new emoji list
         this.groqHandler.updateEmojiList(emojis);
-
-        logger.debug(
-            { emojiCount: this.emojiCache.size }, 
-            "Updated emoji cache"
-        );
+        logger.debug({ 
+            emojiCount: emojis.length,
+            nameCache: this.emojiCache.size,
+            idCache: this.emojiIdCache.size 
+        }, "Updated emoji cache");
     }
 
     /**
      * Formats a Discord emoji into the proper format
      */
     private formatEmoji(emoji: GuildEmoji): string {
-        return emoji.animated 
-            ? `<a:${emoji.name}:${emoji.id}>`
-            : `<:${emoji.name}:${emoji.id}>`;
+        return `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`;
     }
 
     /**
@@ -62,12 +63,42 @@ export class EmojiManager {
     public replaceEmojiNames(text: string): string {
         let processedText = text;
         
-        this.emojiCache.forEach((emojiInfo) => {
-            // Match :emojiname: pattern
-            const pattern = new RegExp(`:${emojiInfo.name}:`, "g");
-            processedText = processedText.replace(pattern, emojiInfo.formatted);
+        const emojiPattern = /(?:<a?:\w+:\d+>)|(?::\w+:)/g;
+        
+        processedText = processedText.replace(emojiPattern, (match) => {
+            if (match.startsWith("<")) {
+                const [, animated, name, id] = match.match(/<(a?):([\w]+):(\d+)>/) || [];
+                const emojiInfo = this.emojiIdCache.get(id);
+                
+                if (emojiInfo && emojiInfo.name === name) {
+                    return match;
+                }
+            }
+            
+            const name = match.replace(/:/g, "");
+            const emojiInfo = this.emojiCache.get(name);
+            
+            if (emojiInfo) {
+                return emojiInfo.formatted;
+            }
+            
+            return match;
         });
 
         return processedText;
+    }
+
+    /**
+     * Validates if an emoji exists and is accessible
+     */
+    public validateEmoji(emojiId: string): boolean {
+        return this.emojiIdCache.has(emojiId) || this.emojiCache.has(emojiId);
+    }
+
+    /**
+     * Gets emoji info by name or ID
+     */
+    public getEmojiInfo(nameOrId: string): EmojiInfo | undefined {
+        return this.emojiIdCache.get(nameOrId) || this.emojiCache.get(nameOrId);
     }
 } 

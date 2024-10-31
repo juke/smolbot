@@ -3,6 +3,7 @@ import { createLogger } from "./utils/logger";
 import { ImageAnalysis, EmojiInfo } from "./types";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { RateLimiter } from "./utils/RateLimiter";
 
 const logger = createLogger("GroqAPI");
 
@@ -22,17 +23,25 @@ export class GroqHandler {
         vision: ModelConfig;
     };
     private emojiList: EmojiInfo[] = [];
+    private rateLimiter: RateLimiter;
 
     constructor(apiKey: string) {
         this.groq = new Groq({
             apiKey,
         });
 
+        // Initialize rate limiter with 30 requests per minute
+        this.rateLimiter = new RateLimiter({
+            tokensPerInterval: 30,
+            intervalMs: 60000, // 1 minute
+            maxTokens: 30
+        });
+
         // Define model configurations with fallbacks
         this.modelConfigs = {
             chat: {
                 primary: "llama-3.2-90b-text-preview",
-                fallback: "llama-3.2-11b-text-preview",
+                fallback: "llama-3.1-70b-versatile",
                 maxRetries: 3
             },
             vision: {
@@ -41,6 +50,26 @@ export class GroqHandler {
                 maxRetries: 3
             }
         };
+    }
+
+    /**
+     * Executes a rate-limited API call
+     */
+    private async executeWithRateLimit<T>(
+        operation: () => Promise<T>,
+        context: string
+    ): Promise<T> {
+        try {
+            await this.rateLimiter.waitForToken();
+            return await operation();
+        } catch (error) {
+            if (error instanceof Error && error.message.includes("rate limit")) {
+                logger.warn({ context }, "Rate limit exceeded, waiting for next interval");
+                await this.rateLimiter.waitForToken();
+                return await operation();
+            }
+            throw error;
+        }
     }
 
     /**
@@ -56,7 +85,10 @@ export class GroqHandler {
         // Try primary model with retries
         for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
             try {
-                return await operation(config.primary);
+                return await this.executeWithRateLimit(
+                    () => operation(config.primary),
+                    context
+                );
             } catch (error) {
                 lastError = error;
                 logger.warn({ 
@@ -76,7 +108,10 @@ export class GroqHandler {
                     attempt,
                     context 
                 }, "Attempting fallback model");
-                return await operation(config.fallback);
+                return await this.executeWithRateLimit(
+                    () => operation(config.fallback),
+                    context
+                );
             } catch (error) {
                 lastError = error;
                 logger.warn({ 
@@ -247,32 +282,35 @@ That's a cute cat!`;
      */
     public async performLightAnalysis(imageUrl: string): Promise<string> {
         try {
-            const completion = await this.groq.chat.completions.create({
-                messages: [
-                    {
-                        role: "user",
-                        content: [
+            return await this.executeWithRateLimit(
+                async () => {
+                    const completion = await this.groq.chat.completions.create({
+                        messages: [
                             {
-                                type: "text",
-                                text: "Provide a brief, 1-2 sentence description (max 25 words) of this image. Focus on the main subject and notable visual elements.",
-                            },
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: imageUrl,
-                                },
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "text",
+                                        text: "Provide a brief, 1-2 sentence description (max 25 words) of this image. Focus on the main subject and notable visual elements.",
+                                    },
+                                    {
+                                        type: "image_url",
+                                        image_url: {
+                                            url: imageUrl,
+                                        },
+                                    },
+                                ],
                             },
                         ],
-                    },
-                ],
-                model: "llama-3.2-11b-vision-preview",
-                max_tokens: 128,
-                temperature: 0.7,
-            });
+                        model: "llama-3.2-11b-vision-preview",
+                        max_tokens: 128,
+                        temperature: 0.7,
+                    });
 
-            const analysis = completion.choices[0]?.message?.content || "Unable to analyze image";
-            logger.debug({ imageUrl, analysis }, "Light image analysis completed");
-            return analysis;
+                    return completion.choices[0]?.message?.content || "Unable to analyze image";
+                },
+                "performLightAnalysis"
+            );
         } catch (error) {
             logger.error({ error, imageUrl }, "Error performing light analysis");
             return "Error analyzing image";
