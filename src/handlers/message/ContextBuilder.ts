@@ -28,7 +28,11 @@ export class ContextBuilder {
         contextSize = 5
     ): Promise<string> {
         const contextMessages: string[] = [];
-        const recentMessages = cache.messages.slice(-contextSize);
+        
+        // Sort messages by timestamp to ensure chronological order
+        const recentMessages = [...cache.messages]
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+            .slice(-contextSize);
         
         for (const msg of recentMessages) {
             const formattedMessage = await this.formatMessage(msg, currentMessage);
@@ -97,7 +101,8 @@ export class ContextBuilder {
         const isSmolBot = msg.authorId === botClientId;
         const prefix = isSmolBot ? "[SmolBot]" : "[User]";
 
-        const messageLine = `${prefix} (@${msg.authorId}) <${msg.authorName}>: ${messageContent}`;
+        // Format the message line with proper mention syntax
+        const messageLine = `${prefix} <@${msg.authorId}> (${msg.authorName}): ${messageContent}`;
         const imageLines = msg.images.map(img => `[Image: ${img.lightAnalysis}]`);
 
         return [messageLine, ...imageLines].join("\n");
@@ -110,7 +115,8 @@ export class ContextBuilder {
         referencedMsg: { content: string; images?: { lightAnalysis: string }[] },
         originalContent: string
     ): Promise<string> {
-        let formattedReference = `[Replying to message: "${referencedMsg.content}"`;
+        // Remove extra quotes and simplify the reply format
+        let formattedReference = `[Replying to message: ${referencedMsg.content}`;
         
         if (referencedMsg.images?.length) {
             const imageDescriptions = referencedMsg.images
@@ -119,6 +125,6 @@ export class ContextBuilder {
             formattedReference += imageDescriptions;
         }
 
-        return `${formattedReference}"]: ${originalContent}`;
+        return `${formattedReference}]: ${originalContent}`;
     }
 } 
