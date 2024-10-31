@@ -62,4 +62,17 @@ export class ChannelCacheManager extends EventEmitter {
     public getMaxSize(): number {
         return this.options.maxSize;
     }
+
+    /**
+     * Finds a message in any channel cache by ID
+     */
+    public findMessage(messageId: string): CachedMessage | undefined {
+        for (const cache of Object.values(this.caches)) {
+            const message = cache.messages.find((m: CachedMessage) => m.id === messageId);
+            if (message) {
+                return message;
+            }
+        }
+        return undefined;
+    }
 } 

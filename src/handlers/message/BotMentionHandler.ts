@@ -38,9 +38,25 @@ export class BotMentionHandler {
             return;
         }
 
+        // Define timeout promise
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+                reject(new Error("Response generation timed out"));
+            }, 30000); // 30 second timeout
+        });
+
         try {
             // Get context and analysis before starting typing
             const previousContext = await this.contextBuilder.buildContext(cache, message, 20, true);
+            
+            // Log context details at debug level
+            logger.debug({ 
+                messageId: message.id,
+                contextLength: previousContext.length,
+                cacheSize: cache.messages.length,
+                hasContext: previousContext.length > 0
+            }, "Built context for message");
+
             const detailedAnalysis = await this.getDetailedImageAnalysis(message, cache);
             
             // Format the current message
@@ -57,27 +73,26 @@ export class BotMentionHandler {
                 detailedAnalysis ? `\n\n[Detailed Analysis: ${detailedAnalysis}]` : ""
             }`;
 
-            // Log what the bot sees
-            logger.info({
+            // Log full context details at debug level
+            logger.debug({ 
                 messageId: message.id,
-                context: {
-                    previousMessages: previousContext,
-                    currentMessage: `[User] <@${currentMessage.author.id}> (${currentMessage.author.name}): ${currentMessage.content}`,
-                    detailedAnalysis: detailedAnalysis || "No image analysis"
-                }
-            }, "Bot's view of conversation");
+                fullContextLength: fullContext.length,
+                hasAnalysis: !!detailedAnalysis
+            }, "Prepared full context for response generation");
+
             // Start typing just before generating response
             const typingInterval = this.startTypingInterval(message.channel);
             
             try {
-                const response = await this.groqHandler.generateResponse(
-                    currentMessage,
-                    fullContext
-                );
+                // Race between response generation and timeout
+                const response = await Promise.race([
+                    this.groqHandler.generateResponse(currentMessage, fullContext),
+                    timeoutPromise
+                ]) as string;
 
                 // Clear typing before sending response
                 clearInterval(typingInterval);
-                const botResponse = await message.reply(response);
+                const botResponse = await message.reply({ content: response });
                 
                 // Process and cache the bot's response
                 const images = await this.imageProcessor.processImages(botResponse);
@@ -90,14 +105,29 @@ export class BotMentionHandler {
                     images,
                     referencedMessage: botResponse.reference?.messageId
                 });
+
+                const duration = Date.now() - startTime;
+                logger.info({ duration, messageId: message.id }, "Message handling completed");
+
             } catch (error) {
                 clearInterval(typingInterval);
-                throw error; // Re-throw to be caught by outer try-catch
+                throw error;
             }
 
         } catch (error) {
-            logger.error({ error, messageId: message.id }, "Error handling bot mention");
-            await message.reply("I encountered an error while processing your message.");
+            const duration = Date.now() - startTime;
+            const errorMessage = error instanceof Error ? error.message : "Unknown error";
+            logger.error({ error, duration, messageId: message.id }, "Error handling bot mention");
+            
+            if (errorMessage === "Response generation timed out") {
+                await message.reply({ 
+                    content: "sorry fren, im taking too long to think rn :sadge: try again in a bit" 
+                });
+            } else {
+                await message.reply({ 
+                    content: "I encountered an error while processing your message." 
+                });
+            }
         }
     }
 
@@ -113,14 +143,15 @@ export class BotMentionHandler {
             });
         }
 
-        // Continue showing typing every 8 seconds (Discord's typing timeout is 10 seconds)
+        // Continue showing typing every 5 seconds instead of 8
+        // Discord's typing timeout is 10 seconds, so this gives better visual feedback
         return setInterval(() => {
             if (this.canShowTyping(channel)) {
                 void channel.sendTyping().catch((error: Error) => {
                     logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
                 });
             }
-        }, 8000);
+        }, 5000);
     }
 
     /**

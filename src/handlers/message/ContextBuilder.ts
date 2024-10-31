@@ -80,72 +80,45 @@ export class ContextBuilder {
     ): Promise<string> {
         let messageContent = msg.content;
 
-        // Handle message references/replies
-        if (msg.referencedMessage && currentMessage?.channel) {
-            const cache = this.cacheManager.getCache(currentMessage.channelId);
-            const referencedMsg = cache?.messages.find(m => m.id === msg.referencedMessage);
-            
-            if (referencedMsg) {
-                messageContent = await this.formatReferencedMessage(referencedMsg, msg.content);
-            } else if (currentMessage) {
-                // Try to fetch from Discord API if not in cache
-                try {
-                    const fetchedMessage = await currentMessage.channel.messages.fetch(msg.referencedMessage);
-                    if (fetchedMessage) {
-                        // Process any images in the fetched message
-                        const images = await this.imageProcessor.processImages(fetchedMessage);
-                        
-                        // Add to cache
-                        this.cacheManager.addMessage(currentMessage.channelId, {
-                            id: fetchedMessage.id,
-                            content: fetchedMessage.content,
-                            authorId: fetchedMessage.author.id,
-                            authorName: fetchedMessage.member?.displayName || fetchedMessage.author.username,
-                            timestamp: fetchedMessage.createdAt,
-                            images,
-                            referencedMessage: fetchedMessage.reference?.messageId,
-                        });
+        // Add referenced message content if available
+        if (msg.referencedMessage) {
+            try {
+                const referencedMsg = currentMessage?.reference?.messageId === msg.referencedMessage
+                    ? currentMessage
+                    : await this.findReferencedMessage(msg.referencedMessage, currentMessage);
 
-                        // Fix: Include author information when formatting referenced message
-                        messageContent = await this.formatReferencedMessage(
-                            {
-                                content: fetchedMessage.content,
-                                images,
-                                authorId: fetchedMessage.author.id,
-                                authorName: fetchedMessage.member?.displayName || fetchedMessage.author.username
-                            },
-                            msg.content
-                        );
-                    }
-                } catch (error) {
-                    logger.error({ 
-                        error, 
-                        referencedMessageId: msg.referencedMessage 
-                    }, "Failed to fetch referenced message");
-                    messageContent = `[Replying to unavailable message]: ${msg.content}`;
+                if (referencedMsg) {
+                    messageContent = `[Replying to: ${referencedMsg.content}]: ${messageContent}`;
                 }
+            } catch (error) {
+                logger.error({ 
+                    error, 
+                    referencedMessageId: msg.referencedMessage 
+                }, "Failed to fetch referenced message");
+                messageContent = `[Replying to unavailable message]: ${msg.content}`;
             }
         }
 
-        const botClientId = process.env.DISCORD_CLIENT_ID;
-        if (!botClientId) {
-            logger.warn("DISCORD_CLIENT_ID not set in environment variables");
-        }
-        
-        const isSmolBot = msg.authorId === botClientId;
-        const prefix = isSmolBot ? "[SmolBot]" : "[User]";
-
         // Format user identifier consistently
         const userIdentifier = `<@${msg.authorId}> (${msg.authorName})`;
-
-        // Add current message marker
         const messagePrefix = isCurrentMessage ? ">>> " : "";
+        const messageLine = `${userIdentifier}: ${messagePrefix}${messageContent}`;
         
-        // Format the message line
-        const messageLine = `${prefix} ${userIdentifier}: ${messagePrefix}${messageContent}`;
+        // Add any image descriptions
         const imageLines = msg.images.map(img => `[Image: ${img.lightAnalysis}]`);
+        const formattedMessage = [messageLine, ...imageLines].join("\n");
 
-        return [messageLine, ...imageLines].join("\n");
+        // Only log if it's the current message or has images
+        if (isCurrentMessage || imageLines.length > 0) {
+            logger.debug({ 
+                messageId: msg.id,
+                isCurrentMessage,
+                hasImages: imageLines.length > 0,
+                formattedMessage
+            }, "Formatted message for context");
+        }
+
+        return formattedMessage;
     }
 
     /**
@@ -166,5 +139,56 @@ export class ContextBuilder {
         }
 
         return `${formattedReference}]: ${originalContent}`;
+    }
+
+    /**
+     * Finds a referenced message either in cache or by fetching
+     */
+    private async findReferencedMessage(
+        messageId: string,
+        currentMessage: Message | null
+    ): Promise<{ content: string; images?: { lightAnalysis: string }[]; authorId: string; authorName: string } | null> {
+        // First check if it's the current message being referenced
+        if (currentMessage?.id === messageId) {
+            return {
+                content: currentMessage.content,
+                authorId: currentMessage.author.id,
+                authorName: currentMessage.member?.displayName || currentMessage.author.username,
+                images: [] // Current message images handled separately
+            };
+        }
+
+        // Then check the cache
+        const cachedMessage = this.cacheManager.findMessage(messageId);
+        if (cachedMessage) {
+            return {
+                content: cachedMessage.content,
+                images: cachedMessage.images,
+                authorId: cachedMessage.authorId,
+                authorName: cachedMessage.authorName
+            };
+        }
+
+        // If not in cache and we have current message, try to fetch from Discord
+        if (currentMessage) {
+            try {
+                const fetchedMessage = await currentMessage.channel.messages.fetch(messageId);
+                if (fetchedMessage) {
+                    // Process any images in the fetched message
+                    const images = await this.imageProcessor.processImages(fetchedMessage);
+                    
+                    return {
+                        content: fetchedMessage.content,
+                        images,
+                        authorId: fetchedMessage.author.id,
+                        authorName: fetchedMessage.member?.displayName || fetchedMessage.author.username
+                    };
+                }
+            } catch (error) {
+                logger.error({ error, messageId }, "Failed to fetch referenced message from Discord");
+            }
+        }
+
+        return null;
     }
 } 

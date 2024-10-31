@@ -141,11 +141,18 @@ That's a cute cat!`;
      * Generates a response with proper emoji formatting
      */
     public async generateResponse(currentMessage: any, context: string): Promise<string> {
+        const startTime = Date.now();
         try {
             // Ensure system message is loaded
             if (!this.systemMessage) {
                 await this.loadSystemMessage();
             }
+
+            logger.debug({ 
+                context, 
+                currentMessage,
+                systemMessageLength: this.systemMessage.length 
+            }, "Generating response with context");
 
             const completion = await this.executeWithFallback(
                 async (model) => this.groq.chat.completions.create({
@@ -169,10 +176,14 @@ That's a cute cat!`;
             );
 
             const response = completion.choices[0]?.message?.content || "";
+            const duration = Date.now() - startTime;
+            logger.info({ duration }, "Groq API response received");
+            
             return this.emojiManager.formatText(response);
 
         } catch (error) {
-            logger.error({ error }, "Error generating response");
+            const duration = Date.now() - startTime;
+            logger.error({ error, duration }, "Error generating response");
             return "sorry, i'm having trouble thinking right now :sadge:";
         }
     }
