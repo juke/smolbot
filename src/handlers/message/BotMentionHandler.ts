@@ -42,7 +42,7 @@ export class BotMentionHandler {
         const timeoutPromise = new Promise<never>((_, reject) => {
             setTimeout(() => {
                 reject(new Error("Response generation timed out"));
-            }, 1000); // 30 second timeout
+            }, 30000); // 30 second timeout
         });
 
         try {
@@ -123,9 +123,13 @@ export class BotMentionHandler {
                 await message.reply({ 
                     content: "sorry fren, im taking too long to think rn :sadge: try again in a bit" 
                 });
+            } else if (errorMessage.includes("Rate limit reached")) {
+                await message.reply({ 
+                    content: "sorry fren, im being rate limited rn :pepesad: try again in a few minutes" 
+                });
             } else {
                 await message.reply({ 
-                    content: "I encountered an error while processing your message." 
+                    content: "I encountered an error while processing your message :sadge:" 
                 });
             }
         }

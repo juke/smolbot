@@ -309,54 +309,39 @@ That's a cute cat!`;
     }
 
     /**
-     * Executes an operation with fallback handling
+     * Executes API call with fallback handling and rate limit backoff
      */
     private async executeWithFallback<T>(
         operation: (model: string) => Promise<T>,
         config: ModelConfig,
         operationName: string
     ): Promise<T> {
-        let lastError: Error | undefined;
-        let rateLimitedModels = new Set<string>();
-
-        // Always include all models in the fallback chain
-        const models = [
-            config.primary,
-            config.fallback,
-            config.instantFallback
-        ];
+        const models = [config.primary, config.fallback, config.instantFallback];
+        let lastError: Error | null = null;
 
         for (const model of models) {
-            // Skip models that are rate limited
-            if (rateLimitedModels.has(model)) {
-                logger.debug({ model }, `Skipping rate-limited model`);
-                continue;
-            }
-
             try {
                 return await operation(model);
             } catch (error) {
-                lastError = error instanceof Error ? error : new Error("Unknown error");
+                lastError = error as Error;
+                const errorMessage = error instanceof Error ? error.message : "Unknown error";
                 
-                // Check for rate limit error
-                if (lastError.message.toLowerCase().includes("rate limit")) {
-                    rateLimitedModels.add(model);
-                    logger.warn({ error: lastError, model }, 
-                        `${operationName}: Model rate limited, switching to next available model`);
+                if (errorMessage.includes("Rate limit reached")) {
+                    logger.warn({ 
+                        component: "GroqAPI",
+                        model,
+                        error 
+                    }, `${operationName}: Model rate limited, switching to next available model`);
+                    
+                    // Add delay before trying next model to avoid rapid rate limit hits
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                     continue;
                 }
                 
-                // For other errors, log and try next model
-                logger.warn({ error: lastError, model }, 
-                    `${operationName} failed, trying next model`);
+                throw error;
             }
         }
 
-        // If all models are rate limited, use a more specific error message
-        if (rateLimitedModels.size === models.length) {
-            throw new Error(`All models are currently rate limited for ${operationName}`);
-        }
-
-        throw lastError || new Error(`All ${operationName} attempts failed`);
+        throw lastError || new Error("All models failed");
     }
 } 
