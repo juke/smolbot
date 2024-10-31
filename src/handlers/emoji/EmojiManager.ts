@@ -71,32 +71,22 @@ export class EmojiManager {
      * This happens after the bot generates its response
      */
     public formatText(text: string): string {
-        // First pass: Handle :emojiname: format
-        text = text.replace(/:(\w+):/g, (match, emojiName) => {
-            const formatted = this.emojiMap.get(emojiName.toLowerCase());
-            return formatted || match;
-        });
-
-        // Second pass: Handle both static and animated emoji formats
-        // Matches both <:name:id> and <a:name:id> patterns
-        text = text.replace(/<(a?):([^:]+):(\d+)>/g, (match, animated, emojiName, emojiId) => {
-            // Check if we have this exact emoji ID
-            const formattedById = this.emojiIdMap.get(emojiId);
-            if (formattedById) {
-                return formattedById;
+        // Skip any text segments that are already properly formatted emoji tags
+        // This regex matches complete emoji tags: <:name:id> or <a:name:id>
+        const segments = text.split(/(<(?:a?):[\w-]+:\d+>)/g);
+        
+        return segments.map(segment => {
+            // If this segment is already a properly formatted emoji tag, leave it unchanged
+            if (segment.match(/^<(?:a?):[\w-]+:\d+>$/)) {
+                return segment;
             }
 
-            // Fallback to name-based lookup if ID doesn't match
-            const formattedByName = this.emojiMap.get(emojiName.toLowerCase());
-            if (formattedByName) {
-                return formattedByName;
-            }
-
-            // If we can't find a match, preserve the original format but ensure it's properly structured
-            return `<${animated}:${emojiName}:${emojiId}>`;
-        });
-
-        return text;
+            // Otherwise, process any :emojiname: formats in this segment
+            return segment.replace(/:(\w+):/g, (match, emojiName) => {
+                const formatted = this.emojiMap.get(emojiName.toLowerCase());
+                return formatted || match;
+            });
+        }).join("");
     }
 
     /**
