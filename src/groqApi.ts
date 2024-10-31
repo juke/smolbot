@@ -32,7 +32,7 @@ export class GroqHandler {
         this.modelConfigs = {
             chat: {
                 primary: "llama-3.2-90b-text-preview",
-                fallback: "lama-3.2-11b-text-preview",
+                fallback: "llama-3.2-11b-text-preview",
                 maxRetries: 3
             },
             vision: {
