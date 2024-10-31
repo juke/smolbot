@@ -35,7 +35,8 @@ export class EmojiManager {
                         isAnimated: emoji.animated ?? false
                     };
                     
-                    this.emojiCache.set(emoji.name, emojiInfo);
+                    const normalizedName = emoji.name.toLowerCase();
+                    this.emojiCache.set(normalizedName, emojiInfo);
                     this.emojiIdCache.set(emoji.id, emojiInfo);
                     emojis.push(emojiInfo);
                 }
@@ -46,7 +47,8 @@ export class EmojiManager {
         logger.debug({ 
             emojiCount: emojis.length,
             nameCache: this.emojiCache.size,
-            idCache: this.emojiIdCache.size 
+            idCache: this.emojiIdCache.size,
+            availableEmojis: emojis.map(e => `${e.name} (${e.formatted})`)
         }, "Updated emoji cache");
     }
 
@@ -54,8 +56,7 @@ export class EmojiManager {
      * Formats a Discord emoji into the proper format
      */
     private formatEmoji(emoji: GuildEmoji): string {
-        const prefix = emoji.animated ? "a" : "";
-        return `<${prefix}:${emoji.name}:${emoji.id}>`;
+        return `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`;
     }
 
     /**
@@ -64,19 +65,22 @@ export class EmojiManager {
     public replaceEmojiNames(text: string): string {
         let processedText = text;
         
-        const emojiPattern = /(?:<[a]?:\w+:\d+>)|(?::[\w-]+:)/g;
+        const emojiPattern = /(?:<a?:[^:]+:\d+>)|(?::[^:\s]+:)/g;
         
         processedText = processedText.replace(emojiPattern, (match) => {
             if (match.startsWith("<")) {
-                const [, animated, name, id] = match.match(/<(a?):([^:]+):(\d+)>/) || [];
-                const emojiInfo = this.emojiIdCache.get(id);
-                
-                if (emojiInfo && emojiInfo.name === name) {
-                    return match;
+                const formatted = match.match(/<(a?):([^:]+):(\d+)>/);
+                if (formatted) {
+                    const [, , name, id] = formatted;
+                    const emojiInfo = this.emojiIdCache.get(id);
+                    
+                    if (emojiInfo && emojiInfo.name.toLowerCase() === name.toLowerCase()) {
+                        return emojiInfo.formatted;
+                    }
                 }
             }
             
-            const name = match.replace(/^:|:$/g, "").trim();
+            const name = match.replace(/^:|:$/g, "").trim().toLowerCase();
             const emojiInfo = this.emojiCache.get(name);
             
             if (emojiInfo) {
@@ -99,14 +103,16 @@ export class EmojiManager {
     /**
      * Validates if an emoji exists and is accessible
      */
-    public validateEmoji(emojiId: string): boolean {
-        return this.emojiIdCache.has(emojiId) || this.emojiCache.has(emojiId);
+    public validateEmoji(nameOrId: string): boolean {
+        const normalizedName = nameOrId.toLowerCase();
+        return this.emojiIdCache.has(nameOrId) || this.emojiCache.has(normalizedName);
     }
 
     /**
      * Gets emoji info by name or ID
      */
     public getEmojiInfo(nameOrId: string): EmojiInfo | undefined {
-        return this.emojiIdCache.get(nameOrId) || this.emojiCache.get(nameOrId);
+        const normalizedName = nameOrId.toLowerCase();
+        return this.emojiIdCache.get(nameOrId) || this.emojiCache.get(normalizedName);
     }
 } 
