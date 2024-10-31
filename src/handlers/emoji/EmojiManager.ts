@@ -37,10 +37,6 @@ export class EmojiManager {
             });
         });
 
-        logger.debug({ 
-            emojiCount: this.emojiMap.size,
-            availableEmojis: Array.from(this.availableEmojis)
-        }, "Updated emoji cache");
     }
 
     /**

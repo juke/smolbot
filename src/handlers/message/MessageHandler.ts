@@ -8,7 +8,6 @@ import { createLogger } from "../../utils/logger";
 import { IntervalMessageHandler } from "./IntervalMessageHandler";
 import { EmojiManager } from "../emoji/EmojiManager";
 import { BotInteractionQueue } from "./BotInteractionQueue";
-import { JsonAdapter } from "../../database/JsonAdapter";
 import path from "path";
 import fs from "fs/promises";
 
@@ -62,14 +61,8 @@ export class MessageHandler {
      */
     private async initializeComponents(): Promise<void> {
         try {
-            const dataDir = path.join(__dirname, "../../../data");
-            await fs.mkdir(dataDir, { recursive: true });
-            
-            const database = new JsonAdapter(dataDir);
-            await database.initialize();
-            
-            // Initialize components
-            this.cacheManager = new ChannelCacheManager({ maxSize: 20 }, database);
+            // Initialize components with in-memory cache only
+            this.cacheManager = new ChannelCacheManager({ maxSize: 20 });
             this.imageProcessor = new ImageProcessor(this.groqHandler);
             this.contextBuilder = new ContextBuilder(this.cacheManager, this.imageProcessor);
             this.botMentionHandler = new BotMentionHandler(
@@ -100,29 +93,7 @@ export class MessageHandler {
      * Main message handling entry point
      */
     public async handleMessage(client: Client, message: Message): Promise<void> {
-        const messageId = message.id;
-        
-        // Skip if already processing
-        if (this.processingMessages.has(messageId)) {
-            return;
-        }
-        
-        try {
-            this.processingMessages.add(messageId);
-            
-            // Initialize cache for this channel if needed
-            if (message.channel.type === ChannelType.GuildText) {
-                await this.initializeCache(message.channelId, message.channel);
-            }
-            
-            // Process the message
-            await this.processMessage(client, message);
-            
-        } catch (error) {
-            logger.error({ error, messageId }, "Error in handleMessage");
-        } finally {
-            this.processingMessages.delete(messageId);
-        }
+        await this.processMessage(client, message);
     }
 
     /**
@@ -167,18 +138,23 @@ export class MessageHandler {
             logger.debug({ 
                 messageId,
                 content: message.content,
-                author: message.author.username,
+                authorId: message.author.id,
                 channelId: message.channelId
             }, "Processing new message");
-
-            // Cache all messages first
-            await this.processNormalMessage(message);
 
             // Check if message is a bot interaction
             const isMentioned = message.mentions.users.has(client.user?.id ?? "");
             const isReplyToBot = message.reference?.messageId && 
                 (await message.channel.messages.fetch(message.reference.messageId))
                     .author.id === client.user?.id;
+
+            // If this is a bot interaction, ensure cache is initialized first
+            if ((isMentioned || isReplyToBot) && message.channel.type === ChannelType.GuildText) {
+                await this.initializeCache(message.channel);
+            }
+
+            // Cache the current message
+            await this.processNormalMessage(message);
 
             // Then handle bot interactions if needed
             if (isMentioned || isReplyToBot) {
@@ -215,44 +191,88 @@ export class MessageHandler {
     }
 
     /**
-     * Initializes the cache for a channel
+     * Initializes or completes the cache for a channel
      */
-    private async initializeCache(channelId: string, channel: TextChannel): Promise<void> {
-        logger.info({ channelId }, "Initializing channel cache");
+    private async initializeCache(channel: TextChannel): Promise<void> {
+        const cache = this.cacheManager.getCache(channel.id);
+        const maxSize = this.cacheManager.getMaxSize();
         
-        // Check if we already have this channel's cache
-        const existingCache = this.cacheManager.getCache(channelId);
-        if (existingCache) {
-            logger.debug({ channelId }, "Cache already exists, skipping initialization");
+        // If cache exists but isn't full, calculate how many more messages we need
+        const currentSize = cache?.messages.length ?? 0;
+        const messagesNeeded = maxSize - currentSize;
+        
+        // If cache is already full, no need to fetch more
+        if (messagesNeeded <= 0) {
             return;
         }
+
+        logger.info({ 
+            channelId: channel.id,
+            currentSize,
+            fetchingAmount: messagesNeeded 
+        }, "Completing channel cache");
         
-        // First try to load from database
-        await this.cacheManager.loadCache(channelId);
+        // If we have existing messages, use the oldest one as reference
+        const oldestMessage = cache?.messages
+            .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())[0];
         
-        // If cache is still empty or outdated, fetch from Discord
-        const cache = this.cacheManager.getCache(channelId);
-        if (!cache || cache.messages.length < this.cacheManager.getMaxSize()) {
-            logger.info({ channelId }, "Fetching historical messages");
-            const messages = await channel.messages.fetch({ 
-                limit: this.cacheManager.getMaxSize() 
-            });
+        // Fetch messages before the oldest cached message, or just recent messages if cache is empty
+        const messages = await channel.messages.fetch({ 
+            limit: messagesNeeded,
+            ...(oldestMessage && { before: oldestMessage.id })
+        });
+        
+        // Process messages in chronological order
+        const sortedMessages = Array.from(messages.values())
+            .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+        for (const message of sortedMessages) {
+            // Process current message's images
+            const images = await this.imageProcessor.processImages(message);
             
-            for (const message of messages.values()) {
-                const images = await this.imageProcessor.processImages(message);
-                await this.cacheManager.addMessage(channelId, {
-                    id: message.id,
-                    content: message.content,
-                    authorId: message.author.id,
-                    authorName: message.member?.displayName || message.author.username,
-                    timestamp: message.createdAt,
-                    images,
-                    referencedMessage: message.reference?.messageId
-                });
+            // Handle referenced message if it exists and isn't already cached
+            if (message.reference?.messageId) {
+                const existingCache = this.cacheManager.getCache(channel.id);
+                const isReferencedMessageCached = existingCache?.messages
+                    .some(m => m.id === message.reference?.messageId);
+                
+                if (!isReferencedMessageCached) {
+                    try {
+                        const referencedMessage = await message.fetchReference();
+                        const refImages = await this.imageProcessor.processImages(referencedMessage);
+                        
+                        await this.cacheManager.addMessage(channel.id, {
+                            id: referencedMessage.id,
+                            content: referencedMessage.content,
+                            authorId: referencedMessage.author.id,
+                            authorName: referencedMessage.member?.displayName || referencedMessage.author.username,
+                            timestamp: referencedMessage.createdAt,
+                            images: refImages,
+                            referencedMessage: referencedMessage.reference?.messageId
+                        });
+                    } catch (error) {
+                        logger.warn({ 
+                            error, 
+                            messageId: message.id,
+                            referencedMessageId: message.reference.messageId 
+                        }, "Failed to fetch referenced message");
+                    }
+                }
             }
+
+            // Add the current message to cache
+            await this.cacheManager.addMessage(channel.id, {
+                id: message.id,
+                content: message.content,
+                authorId: message.author.id,
+                authorName: message.member?.displayName || message.author.username,
+                timestamp: message.createdAt,
+                images,
+                referencedMessage: message.reference?.messageId
+            });
         }
 
-        // Start interval monitoring for this channel
+        // Start interval monitoring for this channel if not already monitoring
         this.intervalHandler.startMonitoring(channel);
     }
 
@@ -266,6 +286,7 @@ export class MessageHandler {
      */
     public async updateEmojis(client: Client): Promise<void> {
         this.emojiManager.updateEmojiCache(client);
+        // Update GroqHandler's emoji list as well
         this.groqHandler.updateEmojiList(client);
         logger.info("Emoji cache updated");
     }
@@ -279,9 +300,6 @@ export class MessageHandler {
             for (const channel of this.intervalHandler.getMonitoredChannels()) {
                 this.stopChannelMonitoring(channel);
             }
-
-            // Cleanup cache manager
-            await this.cacheManager.cleanup();
 
             logger.info("Successfully cleaned up resources");
         } catch (error) {
