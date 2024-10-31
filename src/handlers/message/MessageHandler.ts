@@ -1,4 +1,4 @@
-import { Client, Message, TextChannel, ChannelType } from "discord.js";
+import { Client, Message, TextChannel, ChannelType, BaseGuildTextChannel, DMChannel, TextBasedChannel } from "discord.js";
 import { GroqHandler } from "../../groqApi";
 import { ImageProcessor } from "./ImageProcessor";
 import { ContextBuilder } from "./ContextBuilder";
@@ -9,6 +9,13 @@ import { IntervalMessageHandler } from "./IntervalMessageHandler";
 import { EmojiManager } from "../emoji/EmojiManager";
 
 const logger = createLogger("MessageHandler");
+
+/**
+ * Type guard for channels that support typing indicators
+ */
+type TypingCapableChannel = TextBasedChannel & {
+    sendTyping: () => Promise<void>;
+};
 
 /**
  * Main message handling coordinator
@@ -64,6 +71,26 @@ export class MessageHandler {
     }
 
     /**
+     * Checks if a channel supports typing indicators
+     */
+    private canShowTyping(channel: TextBasedChannel): channel is TypingCapableChannel {
+        return typeof (channel as TypingCapableChannel).sendTyping === "function";
+    }
+
+    /**
+     * Safely sends typing indicator if supported
+     */
+    private async sendTypingIndicator(channel: TextBasedChannel): Promise<void> {
+        if (this.canShowTyping(channel)) {
+            try {
+                await channel.sendTyping();
+            } catch (error) {
+                logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
+            }
+        }
+    }
+
+    /**
      * Processes an incoming message
      */
     private async processMessage(client: Client, message: Message): Promise<void> {
@@ -84,8 +111,20 @@ export class MessageHandler {
                 channelId: message.channelId
             }, "Processing new message");
 
+            // Start typing indicator when bot interaction is detected
+            const isMentioned = message.mentions.has(client.user!.id);
+            const isReplyToBot = message.reference && 
+                (await message.fetchReference().catch(() => null))?.author.id === client.user!.id;
+
+            if (isMentioned || isReplyToBot) {
+                await this.sendTypingIndicator(message.channel);
+                logger.debug({ messageId, isMentioned, isReplyToBot }, "Bot interaction detected");
+                await this.botMentionHandler.handleMention(message);
+            }
+
             // Check for commands
             if (message.content.toLowerCase() === "!text") {
+                await this.sendTypingIndicator(message.channel);
                 const cache = this.cacheManager.getCache(message.channelId);
                 if (cache) {
                     const context = await this.contextBuilder.buildContext(cache, message);
@@ -94,6 +133,7 @@ export class MessageHandler {
                 }
             } else if (message.content.toLowerCase() === "!interject") {
                 if (message.channel.type === ChannelType.GuildText) {
+                    await this.sendTypingIndicator(message.channel);
                     await this.intervalHandler.forceInterjection(message.channel);
                     return;
                 }
@@ -110,16 +150,6 @@ export class MessageHandler {
                 images,
                 referencedMessage: message.reference?.messageId
             });
-
-            // Check for bot interactions
-            const isMentioned = message.mentions.has(client.user!.id);
-            const isReplyToBot = message.reference && 
-                (await message.fetchReference().catch(() => null))?.author.id === client.user!.id;
-
-            if (isMentioned || isReplyToBot) {
-                logger.debug({ messageId, isMentioned, isReplyToBot }, "Bot interaction detected");
-                await this.botMentionHandler.handleMention(message);
-            }
 
         } catch (error) {
             logger.error({ error, messageId }, "Error in processMessage");
