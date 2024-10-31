@@ -114,7 +114,7 @@ export class ContextBuilder {
         const prefix = isSmolBot ? "[SmolBot]" : "[User]";
 
         // Format the message line with proper mention syntax
-        const messageLine = `${prefix} <@${msg.authorId}> (${msg.authorName}): ${messageContent}`;
+        const messageLine = `${prefix} User Tag: <@${msg.authorId}> (${msg.authorName}): ${messageContent}`;
         const imageLines = msg.images.map(img => `[Image: ${img.lightAnalysis}]`);
 
         return [messageLine, ...imageLines].join("\n");

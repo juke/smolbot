@@ -7,6 +7,7 @@ import { ChannelCacheManager } from "../cache/ChannelCacheManager";
 import { createLogger } from "../../utils/logger";
 import { IntervalMessageHandler } from "./IntervalMessageHandler";
 import { EmojiManager } from "../emoji/EmojiManager";
+import { BotInteractionQueue } from "./BotInteractionQueue";
 
 const logger = createLogger("MessageHandler");
 
@@ -29,6 +30,7 @@ export class MessageHandler {
     private readonly botMentionHandler: BotMentionHandler;
     private readonly intervalHandler: IntervalMessageHandler;
     private readonly emojiManager: EmojiManager;
+    private readonly interactionQueue: BotInteractionQueue;
 
     constructor(groqHandler: GroqHandler) {
         if (MessageHandler.instance) {
@@ -52,6 +54,11 @@ export class MessageHandler {
         );
 
         this.emojiManager = new EmojiManager(groqHandler);
+
+        this.interactionQueue = new BotInteractionQueue({
+            maxConcurrent: 3,
+            minDelayMs: 250
+        });
 
         MessageHandler.instance = this;
     }
@@ -116,64 +123,43 @@ export class MessageHandler {
                 channelId: message.channelId
             }, "Processing new message");
 
-            // Start typing indicator when bot interaction is detected
+            // Check if this is a bot interaction
             const isMentioned = message.mentions.has(client.user!.id);
             const isReplyToBot = message.reference && 
                 (await message.fetchReference().catch(() => null))?.author.id === client.user!.id;
 
             if (isMentioned || isReplyToBot) {
-                await this.sendTypingIndicator(message.channel);
-                logger.debug({ messageId, isMentioned, isReplyToBot }, "Bot interaction detected");
-                await this.botMentionHandler.handleMention(message);
-            }
-
-            // Check for commands
-            if (message.content.toLowerCase() === "!text") {
-                await this.sendTypingIndicator(message.channel);
-                const cache = this.cacheManager.getCache(message.channelId);
-                if (cache) {
-                    // Changed from 5 to 20 messages
-                    const context = await this.contextBuilder.buildContext(cache, message, 20, true);
-                    
-                    // Add current message and any detailed analysis that would be included
-                    const detailedAnalysis = await this.botMentionHandler["getDetailedImageAnalysis"](message, cache);
-                    const currentMessageContext = `${context}\n\n[User] <@${message.author.id}> (${
-                        message.member?.displayName || message.author.username
-                    }): ${message.content}`;
-                    
-                    const fullContext = `${currentMessageContext}\n${
-                        detailedAnalysis ? `[Detailed Analysis: ${detailedAnalysis}]` : ""
-                    }`;
-
-                    await message.reply(`Here's how I see the conversation:\n\`\`\`\n${fullContext}\n\`\`\``);
-                    return;
-                }
-            } else if (message.content.toLowerCase() === "!interject") {
-                if (message.channel.type === ChannelType.GuildText) {
+                // Queue bot interactions
+                await this.interactionQueue.enqueue(async () => {
                     await this.sendTypingIndicator(message.channel);
-                    await this.intervalHandler.forceInterjection(message.channel);
-                    return;
-                }
+                    await this.botMentionHandler.handleMention(message);
+                });
+            } else {
+                // Process normal messages immediately for caching
+                await this.processNormalMessage(message);
             }
-
-            // Process images and cache the message
-            const images = await this.imageProcessor.processImages(message);
-            this.cacheManager.addMessage(message.channelId, {
-                id: message.id,
-                content: message.content,
-                authorId: message.author.id,
-                authorName: message.member?.displayName || message.author.username,
-                timestamp: message.createdAt,
-                images,
-                referencedMessage: message.reference?.messageId
-            });
-
         } catch (error) {
             logger.error({ error, messageId }, "Error in processMessage");
         } finally {
             this.processingMessages.delete(messageId);
-            logger.debug({ messageId }, "Finished processing message");
         }
+    }
+
+    /**
+     * Processes a normal message (no bot interaction)
+     */
+    private async processNormalMessage(message: Message): Promise<void> {
+        // Process images and cache the message
+        const images = await this.imageProcessor.processImages(message);
+        this.cacheManager.addMessage(message.channelId, {
+            id: message.id,
+            content: message.content,
+            authorId: message.author.id,
+            authorName: message.member?.displayName || message.author.username,
+            timestamp: message.createdAt,
+            images,
+            referencedMessage: message.reference?.messageId
+        });
     }
 
     /**
