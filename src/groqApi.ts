@@ -71,17 +71,29 @@ export class GroqHandler {
             
             const messages = JSON.parse(systemMessages);
             const emojiList = this.emojiManager.getAvailableEmojis()
-                .map(emoji => `  ${emoji}`)
+                .map(emoji => `:${emoji}:`)
                 .join("\n");
             
-            // Combine personality and instructions with emoji list
-            this.systemMessage = `${messages.personality}\n\n${messages.instructions.join("\n")}`
-                .replace("{{EMOJI_LIST}}", emojiList);
+            const emojiInstructions = `
+STRICT EMOJI USAGE RULES:
+- ONLY use emojis from this exact list (case-insensitive):
+${emojiList}
+- Always use exactly ONE colon on each side of the emoji name
+- Correct format: :emojiname:
+- Incorrect formats: ::emojiname:: or emojiname
+- Do not create or guess emoji names
+- If unsure about an emoji, do not use it
+- Each emoji must be used exactly as shown above (though case doesn't matter)
+- No custom or made-up emoji names allowed
+- Use emojis often to keep your responses fun and engaging`;
+
+            this.systemMessage = `${messages.personality}\n\n${messages.instructions.join("\n")}\n${emojiInstructions}`;
 
             logger.debug({ 
                 emojiCount: this.emojiManager.getAvailableEmojis().length,
-                systemMessageLength: this.systemMessage.length
-            }, "System message updated");
+                systemMessageLength: this.systemMessage.length,
+                availableEmojis: this.emojiManager.getAvailableEmojis()
+            }, "System message updated with strict emoji rules");
 
             return this.systemMessage;
         } catch (error) {
@@ -138,7 +150,7 @@ That's a cute cat!`;
     }
 
     /**
-     * Generates a response with proper emoji formatting
+     * Generates a response with proper emoji formatting and validation
      */
     public async generateResponse(currentMessage: any, context: string): Promise<string> {
         const startTime = Date.now();
@@ -175,9 +187,13 @@ That's a cute cat!`;
                 "generateResponse"
             );
 
-            const response = completion.choices[0]?.message?.content || "";
+            let response = completion.choices[0]?.message?.content || "";
+            
+            // Validate and clean emojis before formatting
+            response = this.validateAndCleanEmojis(response);
+            
             const duration = Date.now() - startTime;
-            logger.info({ duration }, "Groq API response received");
+            logger.info({ duration }, "Groq API response received and cleaned");
             
             return this.emojiManager.formatText(response);
 
@@ -186,6 +202,26 @@ That's a cute cat!`;
             logger.error({ error, duration }, "Error generating response");
             return "sorry, i'm having trouble thinking right now :sadge:";
         }
+    }
+
+    /**
+     * Validates and cleans emoji usage in the response
+     */
+    private validateAndCleanEmojis(text: string): string {
+        // First fix any double colons
+        text = text.replace(/:(:[\w-]+:)/g, "$1");
+        
+        // Then validate emojis
+        return text.replace(/:(\w+):/g, (match, emojiName) => {
+            if (this.emojiManager.hasEmoji(emojiName)) {
+                return match; // Keep valid emojis
+            }
+            logger.warn({ 
+                invalidEmoji: emojiName,
+                availableEmojis: Array.from(this.emojiManager.getAvailableEmojis())
+            }, "Removing invalid emoji from response");
+            return ""; // Remove invalid emojis
+        });
     }
 
     /**

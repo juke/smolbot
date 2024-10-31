@@ -42,7 +42,7 @@ export class BotMentionHandler {
         const timeoutPromise = new Promise<never>((_, reject) => {
             setTimeout(() => {
                 reject(new Error("Response generation timed out"));
-            }, 30000); // 30 second timeout
+            }, 1000); // 30 second timeout
         });
 
         try {

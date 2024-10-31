@@ -28,33 +28,22 @@ export class EmojiManager {
         this.availableEmojis.clear();
         this.emojiIdMap.clear();
 
-        let totalEmojis = 0;
-        let animatedCount = 0;
-
-        client.guilds.cache.forEach(guild => {
-            guild.emojis.cache.forEach(emoji => {
-                if (emoji.name) {
-                    const name = emoji.name.toLowerCase();
-                    const formatted = `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`;
-                    
-                    this.emojiMap.set(name, formatted);
-                    if (emoji.animated) {
-                        this.emojiMap.set(`a${name}`, formatted);
-                        animatedCount++;
-                    }
-                    
-                    this.availableEmojis.add(name);
-                    this.emojiIdMap.set(emoji.id, formatted);
-                    totalEmojis++;
+        for (const guild of client.guilds.cache.values()) {
+            for (const emoji of guild.emojis.cache.values()) {
+                // Store both original and lowercase versions of emoji names
+                const emojiName = emoji.name;
+                if (emojiName) {
+                    const formattedEmoji = `<${emoji.animated ? "a" : ""}:${emojiName}:${emoji.id}>`;
+                    // Store with original case
+                    this.emojiMap.set(emojiName, formattedEmoji);
+                    // Store with lowercase
+                    this.emojiMap.set(emojiName.toLowerCase(), formattedEmoji);
+                    // Store original case in available emojis for system message
+                    this.availableEmojis.add(emojiName);
+                    this.emojiIdMap.set(emoji.id, formattedEmoji);
                 }
-            });
-        });
-
-        logger.info({
-            totalEmojis,
-            animatedCount,
-            guilds: client.guilds.cache.size
-        }, "Emoji cache updated");
+            }
+        }
     }
 
     /**
@@ -63,7 +52,8 @@ export class EmojiManager {
      */
     public getAvailableEmojis(): string[] {
         return Array.from(this.availableEmojis)
-            .map(name => `:${name}:`);
+            .sort() // Sort alphabetically for consistency
+            .map(name => name); // Return just the names without colons
     }
 
     /**
@@ -71,29 +61,44 @@ export class EmojiManager {
      * This happens after the bot generates its response
      */
     public formatText(text: string): string {
-        // Skip any text segments that are already properly formatted emoji tags
-        // This regex matches complete emoji tags: <:name:id> or <a:name:id>
-        const segments = text.split(/(<(?:a?):[\w-]+:\d+>)/g);
-        
-        return segments.map(segment => {
+        // First, fix any double colons that might exist
+        text = text.replace(/:(:[\w-]+:)/g, "$1");
+
+        return text.split(/(\s+)/).map(segment => {
             // If this segment is already a properly formatted emoji tag, leave it unchanged
             if (segment.match(/^<(?:a?):[\w-]+:\d+>$/)) {
                 return segment;
             }
 
-            // Otherwise, process any :emojiname: formats in this segment
+            // Process :emojiname: formats case-insensitively
             return segment.replace(/:(\w+):/g, (match, emojiName) => {
-                const formatted = this.emojiMap.get(emojiName.toLowerCase());
+                // Try exact match first, then lowercase
+                const formatted = this.emojiMap.get(emojiName) || 
+                                this.emojiMap.get(emojiName.toLowerCase());
+                
+                // Log any emoji formatting for debugging
+                if (formatted) {
+                    logger.debug({ 
+                        original: match, 
+                        formatted,
+                        emojiName 
+                    }, "Formatting emoji");
+                }
+                
                 return formatted || match;
             });
         }).join("");
     }
 
     /**
-     * Checks if an emoji name is available
+     * Checks if an emoji name is available (case-insensitive)
      */
     public hasEmoji(name: string): boolean {
-        return this.availableEmojis.has(name.toLowerCase());
+        // Check both original case and lowercase
+        return this.availableEmojis.has(name) || 
+               Array.from(this.availableEmojis).some(emoji => 
+                   emoji.toLowerCase() === name.toLowerCase()
+               );
     }
 
     /**
