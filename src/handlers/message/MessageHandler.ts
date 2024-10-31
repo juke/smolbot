@@ -1,10 +1,12 @@
-import { Client, Message, TextChannel } from "discord.js";
+import { Client, Message, TextChannel, ChannelType } from "discord.js";
 import { GroqHandler } from "../../groqApi";
 import { ImageProcessor } from "./ImageProcessor";
 import { ContextBuilder } from "./ContextBuilder";
 import { BotMentionHandler } from "./BotMentionHandler";
 import { ChannelCacheManager } from "../cache/ChannelCacheManager";
 import { createLogger } from "../../utils/logger";
+import { IntervalMessageHandler } from "./IntervalMessageHandler";
+import { EmojiManager } from "../emoji/EmojiManager";
 
 const logger = createLogger("MessageHandler");
 
@@ -18,6 +20,8 @@ export class MessageHandler {
     private readonly imageProcessor: ImageProcessor;
     private readonly contextBuilder: ContextBuilder;
     private readonly botMentionHandler: BotMentionHandler;
+    private readonly intervalHandler: IntervalMessageHandler;
+    private readonly emojiManager: EmojiManager;
 
     constructor(groqHandler: GroqHandler) {
         if (MessageHandler.instance) {
@@ -34,6 +38,14 @@ export class MessageHandler {
             this.cacheManager
         );
 
+        this.intervalHandler = new IntervalMessageHandler(
+            groqHandler,
+            this.contextBuilder,
+            this.cacheManager
+        );
+
+        this.emojiManager = new EmojiManager(groqHandler);
+
         MessageHandler.instance = this;
     }
 
@@ -47,9 +59,8 @@ export class MessageHandler {
     /**
      * Main message handling entry point
      */
-    public static async handleMessage(client: Client, message: Message): Promise<void> {
-        const instance = MessageHandler.getInstance();
-        await instance.processMessage(client, message);
+    public async handleMessage(client: Client, message: Message): Promise<void> {
+        await this.processMessage(client, message);
     }
 
     /**
@@ -73,12 +84,17 @@ export class MessageHandler {
                 channelId: message.channelId
             }, "Processing new message");
 
-            // Check for !text command
+            // Check for commands
             if (message.content.toLowerCase() === "!text") {
                 const cache = this.cacheManager.getCache(message.channelId);
                 if (cache) {
                     const context = await this.contextBuilder.buildContext(cache, message);
                     await message.reply(`Here's how I see the conversation:\n\`\`\`\n${context}\n\`\`\``);
+                    return;
+                }
+            } else if (message.content.toLowerCase() === "!interject") {
+                if (message.channel.type === ChannelType.GuildText) {
+                    await this.intervalHandler.forceInterjection(message.channel);
                     return;
                 }
             }
@@ -89,7 +105,7 @@ export class MessageHandler {
                 id: message.id,
                 content: message.content,
                 authorId: message.author.id,
-                authorName: message.author.username,
+                authorName: message.member?.displayName || message.author.username,
                 timestamp: message.createdAt,
                 images,
                 referencedMessage: message.reference?.messageId
@@ -114,7 +130,7 @@ export class MessageHandler {
     }
 
     /**
-     * Initializes the cache for a channel
+     * Initializes the cache for a channel and starts interval monitoring
      */
     public async initializeCache(channel: TextChannel): Promise<void> {
         logger.info({ channelId: channel.id }, "Initializing channel cache");
@@ -126,11 +142,29 @@ export class MessageHandler {
                 id: message.id,
                 content: message.content,
                 authorId: message.author.id,
-                authorName: message.author.username,
+                authorName: message.member?.displayName || message.author.username,
                 timestamp: message.createdAt,
                 images,
                 referencedMessage: message.reference?.messageId
             });
         }
+
+        // Start interval monitoring for this channel
+        this.intervalHandler.startMonitoring(channel);
     }
-} 
+
+    // Add method to stop monitoring when needed
+    public stopChannelMonitoring(channelId: string): void {
+        this.intervalHandler.stopMonitoring(channelId);
+    }
+
+    /**
+     * Updates emoji cache when needed
+     */
+    public updateEmojis(client: Client): void {
+        this.emojiManager.updateEmojiCache(client);
+    }
+}
+
+// Add a default export
+export default MessageHandler; 

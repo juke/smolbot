@@ -3,7 +3,7 @@ import { Client, Events, GatewayIntentBits } from "discord.js";
 import { config } from "dotenv";
 import { createLogger } from "./utils/logger";
 import { GroqHandler } from "./groqApi";
-import { MessageHandler } from "./handlers/message/MessageHandler";
+import MessageHandler from "./handlers/message/MessageHandler";
 
 config();
 
@@ -27,11 +27,14 @@ if (!MessageHandler['instance']) {
 
 client.once(Events.ClientReady, (readyClient) => {
     logger.info(`Logged in as ${readyClient.user.tag}!`);
+    
+    // Update emoji cache when bot is ready
+    MessageHandler.getInstance().updateEmojis(readyClient);
 });
 
 client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
-    await MessageHandler.handleMessage(client, message);
+    await MessageHandler.getInstance().handleMessage(client, message);
 });
 
 client.login(process.env.DISCORD_TOKEN);

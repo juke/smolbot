@@ -29,5 +29,15 @@ interface ChannelCache {
     lastMessageId?: string;
 }
 
-export type { ImageAnalysis, CachedMessage, ChannelCache };
+/**
+ * Represents a Discord emoji with its formatting information
+ */
+interface EmojiInfo {
+    name: string;
+    id: string;
+    formatted: string;
+    isAnimated: boolean;
+}
+
+export type { ImageAnalysis, CachedMessage, ChannelCache, EmojiInfo };
   

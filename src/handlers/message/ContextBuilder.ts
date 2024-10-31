@@ -13,14 +13,18 @@ export class ContextBuilder {
     constructor(
         private cacheManager: ChannelCacheManager,
         private imageProcessor: ImageProcessor
-    ) {}
+    ) {
+        if (!process.env.DISCORD_CLIENT_ID) {
+            throw new Error("DISCORD_CLIENT_ID must be set in environment variables");
+        }
+    }
 
     /**
      * Builds formatted conversation context
      */
     public async buildContext(
         cache: ChannelCache, 
-        currentMessage: Message, 
+        currentMessage: Message | null, 
         contextSize = 5
     ): Promise<string> {
         const contextMessages: string[] = [];
@@ -37,17 +41,20 @@ export class ContextBuilder {
     /**
      * Formats a single message with proper prefixes and image descriptions
      */
-    private async formatMessage(msg: CachedMessage, currentMessage: Message): Promise<string> {
+    private async formatMessage(
+        msg: CachedMessage, 
+        currentMessage: Message | null
+    ): Promise<string> {
         let messageContent = msg.content;
 
         // Handle message references/replies
-        if (msg.referencedMessage) {
+        if (msg.referencedMessage && currentMessage?.channel) {
             const cache = this.cacheManager.getCache(currentMessage.channelId);
             const referencedMsg = cache?.messages.find(m => m.id === msg.referencedMessage);
             
             if (referencedMsg) {
                 messageContent = await this.formatReferencedMessage(referencedMsg, msg.content);
-            } else {
+            } else if (currentMessage) {
                 // Try to fetch from Discord API if not in cache
                 try {
                     const fetchedMessage = await currentMessage.channel.messages.fetch(msg.referencedMessage);
@@ -60,7 +67,7 @@ export class ContextBuilder {
                             id: fetchedMessage.id,
                             content: fetchedMessage.content,
                             authorId: fetchedMessage.author.id,
-                            authorName: fetchedMessage.author.username,
+                            authorName: fetchedMessage.member?.displayName || fetchedMessage.author.username,
                             timestamp: fetchedMessage.createdAt,
                             images,
                             referencedMessage: fetchedMessage.reference?.messageId,
@@ -81,15 +88,16 @@ export class ContextBuilder {
             }
         }
 
-        const botId = currentMessage.client.user?.id;
-        const isSmolBot = msg.authorId === botId;
-        const isUser = msg.authorId === currentMessage.author.id;
+        // Properly check for bot messages using the environment variable
+        const botClientId = process.env.DISCORD_CLIENT_ID;
+        if (!botClientId) {
+            logger.warn("DISCORD_CLIENT_ID not set in environment variables");
+        }
         
-        const prefix = isSmolBot ? "[SmolBot]" : 
-                      (!isSmolBot && !isUser) ? "[Other Bot]" : 
-                      "[User]";
+        const isSmolBot = msg.authorId === botClientId;
+        const prefix = isSmolBot ? "[SmolBot]" : "[User]";
 
-        const messageLine = `${prefix} <@${msg.authorId}> (${msg.authorName}): ${messageContent}`;
+        const messageLine = `${prefix} (@${msg.authorId}) <${msg.authorName}>: ${messageContent}`;
         const imageLines = msg.images.map(img => `[Image: ${img.lightAnalysis}]`);
 
         return [messageLine, ...imageLines].join("\n");
