@@ -1,9 +1,9 @@
 // src/index.ts
-import { Client, Events, GatewayIntentBits, TextChannel } from "discord.js";
+import { Client, Events, GatewayIntentBits } from "discord.js";
 import { config } from "dotenv";
 import { createLogger } from "./utils/logger";
 import { GroqHandler } from "./groqApi";
-import { MessageHandler } from "./messageHandler";
+import { MessageHandler } from "./handlers/message/MessageHandler";
 
 config();
 
