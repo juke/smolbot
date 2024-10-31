@@ -1,0 +1,114 @@
+# Discord Bot Architecture with Vision Processing 
+# SmolBot
+
+## Technical Stack
+- TypeScript & Node.js runtime environment
+- Discord.js for bot interactions
+- Groq API for text and vision processing
+
+## Vision Processing System
+- Two-tier vision analysis system:
+  - Light Analysis (llama-3.2-11b-vision-preview):
+    - Applied to ALL images in monitored channels
+    - Quick 1-2 sentence descriptions (30 words max)
+    - Lower token usage (256 max tokens)
+    - Provides basic context for every image
+  
+  - Detailed Analysis (llama-3.2-90b-vision-preview):
+    - Additional analysis when bot is mentioned with images
+    - Comprehensive analysis (150 words max)
+    - Higher token allocation (1024 max tokens)
+    - Covers subjects, composition, context, and implications
+
+## Image Context Management
+- Message Cache Integration:
+  - Images stored with message context in memory
+  - Maintains last 20 messages per channel
+  - Each message tracks:
+    - Image URLs
+    - Light analysis results
+    - Detailed analysis (if performed)
+    - Message references and context
+
+- Vision Processing Flow:
+  1. Image Detection:
+     - Scans ALL incoming messages for attachments
+     - Filters for supported image types
+     - Immediately performs light analysis
+     - Stores results with message data
+
+  2. Analysis Pipeline:
+     - Light analysis runs automatically
+     - If message mentions bot:
+       - Triggers detailed analysis
+       - Combines both analysis results
+       - Updates message context
+
+  3. Response Generation:
+     - Uses appropriate analysis based on context
+     - Light analysis for referenced images
+     - Detailed analysis for direct interactions, the bot should use this to form a response with the more detailed image analysis. The bot should think the image description is an actual image.
+     - Maintains conversation coherence
+
+## Message Structure with Vision (this is how the conversation should appear to the bot we're making)
+  Format:
+  - [User] messages are from Discord users
+  - [SmolBot] messages are your previous responses
+  - [Other Bot] messages are from other bots or system notifications
+  - Users are referenced by their Discord mention (e.g., <@123456>)
+  - Images are described in [Image: description] format
+  - Message replies show the original message content
+  - Emojis are rendered as <:emoteName:123456789> and <a:emoteName:123456789>
+
+## Example:
+  [User] <@123456> (JohnDoe): Hello! Check out my cat
+  [Image: An orange tabby cat sleeping on a windowsill in the sunlight]
+
+  [User] <@123456> (JohnDoe): What do you think? @smolbot
+
+  [SmolBot] <@789012> (SmolBot): That's a beautiful cat! The way it's lounging in the sunlight is so peaceful.
+
+  [User] <@123456> (JohnDoe): [Replying to message: "That's a beautiful cat! The way it's lounging in the sunlight is so peaceful."]:
+  Thanks! Here's my dog too
+
+  [SmolBot] <@789012> (SmolBot): Your pets are adorable! The golden retriever looks so playful with that ball. You must have a very happy household with both a relaxed cat and an energetic dog!
+
+  [User] <@123456> (JohnDoe): Which one do you like better?
+
+  [Other Bot] <@442424> (NewBot): I am a bot. Beep.
+
+## Vision-Enhanced Features
+- Automatic Light Analysis:
+  - Runs on every image
+  - Maintains basic context
+  - Available for reference in conversations
+
+Emoji and Reaction Management:
+- Support for both Unicode and custom guild emojis
+- Proper emoji rendering in message history:
+  - Static guild emojis (<:emoteName:123456789>)
+  - Animated guild emojis (<a:emoteName:123456789>)
+- Reaction handling:
+  - Ability to react with custom guild emojis
+  - Tracking reaction history in message context
+  - Support for reaction-based interactions
+  - Proper reaction order management using async/await
+- Message reference handling:
+  - Maintaining original message context in replies
+  - Preserving emoji context in referenced messages
+  - Proper rendering of nested emoji references
+- Message Cache Management:
+  - Stores ImageCacheData in memory
+  - Maintains rolling window of recent messages
+  - Cleans up old messages automatically
+  - Preserves image context within conversation scope
+
+  Core Components:
+- Discord message handling and event system
+- Groq API integration for text and vision
+- Conversation context management with formatted history
+- Error handling and logging (Winston/Pino)
+- Environment-based configuration
+- Emoji and reaction management system
+
+This architecture ensures every image receives basic analysis while providing detailed insights when directly interacting with the bot. The in-memory message cache maintains recent context without relying on external storage, enabling natural conversations about images both in passing and during direct interactions.
