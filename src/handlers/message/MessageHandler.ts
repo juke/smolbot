@@ -8,7 +8,7 @@ import { createLogger } from "../../utils/logger";
 import { IntervalMessageHandler } from "./IntervalMessageHandler";
 import { EmojiManager } from "../emoji/EmojiManager";
 import { BotInteractionQueue } from "./BotInteractionQueue";
-import { SQLiteAdapter } from "../../database/SQLiteAdapter";
+import { JsonAdapter } from "../../database/JsonAdapter";
 import path from "path";
 import fs from "fs/promises";
 
@@ -65,8 +65,7 @@ export class MessageHandler {
             const dataDir = path.join(__dirname, "../../../data");
             await fs.mkdir(dataDir, { recursive: true });
             
-            const dbPath = path.join(dataDir, "cache.db");
-            const database = new SQLiteAdapter(dbPath);
+            const database = new JsonAdapter(dataDir);
             await database.initialize();
             
             // Initialize components
@@ -101,7 +100,29 @@ export class MessageHandler {
      * Main message handling entry point
      */
     public async handleMessage(client: Client, message: Message): Promise<void> {
-        await this.processMessage(client, message);
+        const messageId = message.id;
+        
+        // Skip if already processing
+        if (this.processingMessages.has(messageId)) {
+            return;
+        }
+        
+        try {
+            this.processingMessages.add(messageId);
+            
+            // Initialize cache for this channel if needed
+            if (message.channel.type === ChannelType.GuildText) {
+                await this.initializeCache(message.channelId, message.channel);
+            }
+            
+            // Process the message
+            await this.processMessage(client, message);
+            
+        } catch (error) {
+            logger.error({ error, messageId }, "Error in handleMessage");
+        } finally {
+            this.processingMessages.delete(messageId);
+        }
     }
 
     /**
@@ -194,24 +215,32 @@ export class MessageHandler {
     }
 
     /**
-     * Initializes the cache for a channel and starts interval monitoring
+     * Initializes the cache for a channel
      */
-    public async initializeCache(channel: TextChannel): Promise<void> {
-        logger.info({ channelId: channel.id }, "Initializing channel cache");
+    private async initializeCache(channelId: string, channel: TextChannel): Promise<void> {
+        logger.info({ channelId }, "Initializing channel cache");
+        
+        // Check if we already have this channel's cache
+        const existingCache = this.cacheManager.getCache(channelId);
+        if (existingCache) {
+            logger.debug({ channelId }, "Cache already exists, skipping initialization");
+            return;
+        }
         
         // First try to load from database
-        await this.cacheManager.loadCache(channel.id);
+        await this.cacheManager.loadCache(channelId);
         
-        // If cache is empty or outdated, fetch from Discord
-        const cache = this.cacheManager.getCache(channel.id);
+        // If cache is still empty or outdated, fetch from Discord
+        const cache = this.cacheManager.getCache(channelId);
         if (!cache || cache.messages.length < this.cacheManager.getMaxSize()) {
+            logger.info({ channelId }, "Fetching historical messages");
             const messages = await channel.messages.fetch({ 
                 limit: this.cacheManager.getMaxSize() 
             });
             
             for (const message of messages.values()) {
                 const images = await this.imageProcessor.processImages(message);
-                await this.cacheManager.addMessage(channel.id, {
+                await this.cacheManager.addMessage(channelId, {
                     id: message.id,
                     content: message.content,
                     authorId: message.author.id,
@@ -233,39 +262,12 @@ export class MessageHandler {
     }
 
     /**
-     * Loads caches for all accessible channels
-     */
-    private async loadAllChannelCaches(client: Client): Promise<void> {
-        try {
-            const channels = client.channels.cache.filter(
-                (channel): channel is TextChannel => 
-                    channel.type === ChannelType.GuildText
-            );
-
-            logger.info(`Loading caches for ${channels.size} channels`);
-
-            for (const channel of channels.values()) {
-                await this.initializeCache(channel);
-            }
-
-            logger.info("Successfully loaded all channel caches");
-        } catch (error) {
-            logger.error({ error }, "Error loading channel caches");
-        }
-    }
-
-    /**
      * Updates emoji cache and refreshes system message
      */
     public async updateEmojis(client: Client): Promise<void> {
         this.emojiManager.updateEmojiCache(client);
-        // Update GroqHandler's emoji list as well
         this.groqHandler.updateEmojiList(client);
-        
-        // Load all channel caches after emoji cache is updated
-        await this.loadAllChannelCaches(client);
-        
-        logger.info("Emoji cache updated and channel caches loaded");
+        logger.info("Emoji cache updated");
     }
 
     /**
