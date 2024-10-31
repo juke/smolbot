@@ -186,7 +186,10 @@ That's a cute cat!`;
      * @param context Previous conversation context
      * @returns AI-generated response
      */
-    public async generateResponse(userMessage: string, context: string): Promise<string> {
+    public async generateResponse(
+        userMessage: string, 
+        context: string
+    ): Promise<string> {
         try {
             const completion = await this.executeWithFallback(
                 async (model) => this.groq.chat.completions.create({
@@ -198,6 +201,10 @@ That's a cute cat!`;
                         {
                             role: "user",
                             content: context,
+                        },
+                        {
+                            role: "system",
+                            content: "The user is directly mentioning you in a new conversation or continuing an existing one.",
                         },
                     ],
                     model,

@@ -32,12 +32,16 @@ export class BotMentionHandler {
         }
 
         try {
-            const context = await this.contextBuilder.buildContext(cache, message);
+            const context = await this.contextBuilder.buildContext(cache, message, 20);
             const detailedAnalysis = await this.getDetailedImageAnalysis(message, cache);
+            
+            const currentMessageContext = `${context}\n\n[User] <@${message.author.id}> (${
+                message.member?.displayName || message.author.username
+            }): ${message.content}`;
             
             const response = await this.groqHandler.generateResponse(
                 message.content,
-                `${context}\n${detailedAnalysis ? `[Detailed Analysis: ${detailedAnalysis}]` : ""}`
+                `${currentMessageContext}\n${detailedAnalysis ? `[Detailed Analysis: ${detailedAnalysis}]` : ""}`
             );
 
             const botResponse = await message.reply(response);

@@ -25,14 +25,20 @@ export class ContextBuilder {
     public async buildContext(
         cache: ChannelCache, 
         currentMessage: Message | null, 
-        contextSize = 5
+        contextSize = 20,
+        excludeCurrentMessage = false
     ): Promise<string> {
         const contextMessages: string[] = [];
         
         // Sort messages by timestamp to ensure chronological order
-        const recentMessages = [...cache.messages]
+        let recentMessages = [...cache.messages]
             .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
             .slice(-contextSize);
+
+        // Optionally exclude the current message from context
+        if (excludeCurrentMessage && currentMessage) {
+            recentMessages = recentMessages.filter(msg => msg.id !== currentMessage.id);
+        }
         
         for (const msg of recentMessages) {
             const formattedMessage = await this.formatMessage(msg, currentMessage);

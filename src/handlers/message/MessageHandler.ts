@@ -132,8 +132,20 @@ export class MessageHandler {
                 await this.sendTypingIndicator(message.channel);
                 const cache = this.cacheManager.getCache(message.channelId);
                 if (cache) {
-                    const context = await this.contextBuilder.buildContext(cache, message);
-                    await message.reply(`Here's how I see the conversation:\n\`\`\`\n${context}\n\`\`\``);
+                    // Changed from 5 to 20 messages
+                    const context = await this.contextBuilder.buildContext(cache, message, 20, true);
+                    
+                    // Add current message and any detailed analysis that would be included
+                    const detailedAnalysis = await this.botMentionHandler["getDetailedImageAnalysis"](message, cache);
+                    const currentMessageContext = `${context}\n\n[User] <@${message.author.id}> (${
+                        message.member?.displayName || message.author.username
+                    }): ${message.content}`;
+                    
+                    const fullContext = `${currentMessageContext}\n${
+                        detailedAnalysis ? `[Detailed Analysis: ${detailedAnalysis}]` : ""
+                    }`;
+
+                    await message.reply(`Here's how I see the conversation:\n\`\`\`\n${fullContext}\n\`\`\``);
                     return;
                 }
             } else if (message.content.toLowerCase() === "!interject") {
