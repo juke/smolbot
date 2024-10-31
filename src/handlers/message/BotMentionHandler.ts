@@ -90,6 +90,8 @@ export class BotMentionHandler {
      * Gets detailed image analysis from current or referenced message
      */
     private async getDetailedImageAnalysis(message: Message, cache: ChannelCache): Promise<string> {
+        let analysis = "";
+
         // Check for images in the current message first
         if (message.attachments.size > 0) {
             const firstImage = Array.from(message.attachments.values())
@@ -101,25 +103,75 @@ export class BotMentionHandler {
                     imageUrl: firstImage.url
                 }, "Performing detailed analysis on current message image");
                 
-                return await this.imageProcessor.performDetailedAnalysis(firstImage.url);
+                analysis = await this.imageProcessor.performDetailedAnalysis(firstImage.url);
             }
         }
         
-        // If no images in current message, check referenced message
+        // If message is a reply, also check referenced message for images
         if (message.reference) {
-            const referencedMessage = cache.messages.find((m: CachedMessage) => m.id === message.reference?.messageId);
-            if (referencedMessage?.images.length) {
-                logger.debug({ 
-                    messageId: message.id,
-                    imageUrl: referencedMessage.images[0].url
-                }, "Performing detailed analysis on referenced message image");
+            try {
+                // First try to find in cache
+                const referencedMessage = cache.messages.find(m => m.id === message.reference?.messageId);
                 
-                return await this.imageProcessor.performDetailedAnalysis(
-                    referencedMessage.images[0].url
-                );
+                if (referencedMessage?.images.length) {
+                    logger.debug({ 
+                        messageId: message.id,
+                        referencedMessageId: message.reference.messageId,
+                        imageUrl: referencedMessage.images[0].url
+                    }, "Performing detailed analysis on referenced message image");
+                    
+                    const refAnalysis = await this.imageProcessor.performDetailedAnalysis(
+                        referencedMessage.images[0].url
+                    );
+                    
+                    // Combine analyses if both current and referenced messages have images
+                    analysis = analysis 
+                        ? `Current Image: ${analysis}\nReferenced Image: ${refAnalysis}`
+                        : refAnalysis;
+                } else {
+                    // If not in cache, try to fetch from Discord
+                    const fetchedMessage = await message.fetchReference();
+                    if (fetchedMessage.attachments.size > 0) {
+                        const firstImage = Array.from(fetchedMessage.attachments.values())
+                            .find(attachment => attachment.contentType?.startsWith("image/"));
+                        
+                        if (firstImage) {
+                            logger.debug({ 
+                                messageId: message.id,
+                                referencedMessageId: fetchedMessage.id,
+                                imageUrl: firstImage.url
+                            }, "Performing detailed analysis on fetched referenced message image");
+                            
+                            const refAnalysis = await this.imageProcessor.performDetailedAnalysis(firstImage.url);
+                            
+                            // Combine analyses if both current and referenced messages have images
+                            analysis = analysis 
+                                ? `Current Image: ${analysis}\nReferenced Image: ${refAnalysis}`
+                                : refAnalysis;
+                                
+                            // Process and cache the referenced message
+                            const images = await this.imageProcessor.processImages(fetchedMessage);
+                            this.cacheManager.addMessage(message.channelId, {
+                                id: fetchedMessage.id,
+                                content: fetchedMessage.content,
+                                authorId: fetchedMessage.author.id,
+                                authorName: fetchedMessage.member?.displayName || fetchedMessage.author.username,
+                                timestamp: fetchedMessage.createdAt,
+                                images,
+                                referencedMessage: fetchedMessage.reference?.messageId
+                            });
+                        }
+                    }
+                }
+            } catch (error) {
+                logger.error({ 
+                    error, 
+                    messageId: message.id,
+                    referencedMessageId: message.reference.messageId 
+                }, "Error analyzing referenced message image");
             }
         }
 
-        return "";
+        return analysis;
     }
 } 
