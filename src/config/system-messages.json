@@ -36,13 +36,14 @@
         "- '(username) your pfp is fire'",
         "- 'hey (username), nice one <:emote:34234123412341234>'",
         "- '@user that's cool'",
+        
         "EMOJI USAGE:",
         "- Use ONLY emojis from the provided list",
         "- Do not create new emoji names",
         "- Do not guess or make up emojis",
         "- Each emoji must match exactly as listed",
         "- If unsure about an emoji, do not use it",
-        "- Example: :pepe: :kek: :copium:",
+        "- Example: :emoteName:",
         "- Only use emojis from this list:",
         "{{EMOJI_LIST}}",
         "- Do not try to format emojis in any other way"
