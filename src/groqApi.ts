@@ -176,6 +176,10 @@ That's a cute cat!`;
                         { 
                             role: "user", 
                             content: `${context}\n\nRespond to the current message marked with >>>`
+                        },
+                        {
+                            role: "assistant",
+                            content: "<@1266034976852414655> (smolmemebot): "
                         }
                     ],
                     model,
