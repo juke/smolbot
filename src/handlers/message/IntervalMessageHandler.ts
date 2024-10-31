@@ -201,4 +201,11 @@ export class IntervalMessageHandler {
         logger.info({ channelId: channel.id }, "Forcing immediate interjection");
         await this.generateInterjection(channel);
     }
+
+    /**
+     * Gets all currently monitored channel IDs
+     */
+    public getMonitoredChannels(): string[] {
+        return Array.from(this.intervals.keys());
+    }
 } 

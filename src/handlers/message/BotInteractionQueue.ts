@@ -1,101 +1,72 @@
-import { createLogger } from "../../utils/logger";
 import { TextBasedChannel } from "discord.js";
+import { createLogger } from "../../utils/logger";
 
 const logger = createLogger("BotInteractionQueue");
 
+/**
+ * Configuration options for the interaction queue
+ */
 interface QueueOptions {
+    /** Minimum delay between actions in milliseconds */
     minDelayMs: number;
 }
-
-/**
- * Type for channels that support typing indicators
- */
-type TypingCapableChannel = TextBasedChannel & {
-    sendTyping: () => Promise<void>;
-};
 
 /**
  * Manages queuing of bot interactions with message spacing
  */
 export class BotInteractionQueue {
-    private queue: Array<{
-        interaction: () => Promise<void>;
-        timestamp: number;
-        priority: number;
-        channel: TextBasedChannel;
-    }> = [];
-    private processing: boolean = false;
+    private queue: Array<() => Promise<void>> = [];
+    private processing = false;
     private readonly options: QueueOptions;
 
-    constructor(options: QueueOptions = { minDelayMs: 2000 }) {
+    constructor(options: QueueOptions) {
         this.options = options;
     }
 
     /**
-     * Adds an interaction to the queue with priority handling
+     * Enqueues a bot interaction with typing indicator
+     * @param action - The action to perform
+     * @param channel - The channel to show typing in
+     * @param priority - Higher priority items are processed first
      */
     public async enqueue(
-        interaction: () => Promise<void>,
+        action: () => Promise<void>,
         channel: TextBasedChannel,
-        priority: number = 1
+        priority = 0
     ): Promise<void> {
-        this.queue.push({
-            interaction,
-            channel,
-            timestamp: Date.now(),
-            priority
-        });
+        const task = async () => {
+            try {
+                await action();
+            } catch (error) {
+                logger.error({ error }, "Error executing queued action");
+            }
+        };
 
-        logger.debug({ 
-            queueLength: this.queue.length,
-            isProcessing: this.processing,
-            priority 
-        }, "Added interaction to queue");
-        
+        if (priority > 0) {
+            this.queue.unshift(task);
+        } else {
+            this.queue.push(task);
+        }
+
         if (!this.processing) {
-            await this.processQueue();
+            void this.processQueue();
         }
     }
 
     /**
-     * Processes queued interactions one at a time
+     * Processes the queue with delays between actions
      */
     private async processQueue(): Promise<void> {
-        if (this.processing || this.queue.length === 0) {
-            return;
-        }
+        if (this.processing || this.queue.length === 0) return;
 
         this.processing = true;
 
         try {
-            // Sort queue by priority and timestamp
-            this.queue.sort((a, b) => {
-                if (a.priority !== b.priority) {
-                    return b.priority - a.priority; // Higher priority first
-                }
-                return a.timestamp - b.timestamp; // Older timestamps first
-            });
-
             while (this.queue.length > 0) {
-                const item = this.queue.shift();
-                if (!item) continue;
-
-                // Start typing indicator
-                const typingInterval = this.startTypingInterval(item.channel);
-
-                try {
-                    // Wait for initial delay with typing indicator
-                    await new Promise(resolve => setTimeout(resolve, this.options.minDelayMs));
-                    
-                    // Process the interaction
-                    await item.interaction();
-                } catch (error) {
-                    logger.error({ error }, "Error in queue processing");
-                } finally {
-                    // Clear typing indicator
-                    clearInterval(typingInterval);
-                    
-                    // Add delay before next message if there is one
+                const task = this.queue.shift();
+                if (task) {
+                    await task();
+                    // Add delay between actions
                     if (this.queue.length > 0) {
                         await new Promise(resolve => setTimeout(resolve, this.options.minDelayMs));
                     }
@@ -104,43 +75,5 @@ export class BotInteractionQueue {
         } finally {
             this.processing = false;
         }
-    }
-
-    /**
-     * Starts a typing indicator interval
-     */
-    private startTypingInterval(channel: TextBasedChannel): NodeJS.Timeout {
-        // Send initial typing indicator
-        if (this.canShowTyping(channel)) {
-            void channel.sendTyping().catch((error: Error) => {
-                logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
-            });
-        }
-
-        // Continue showing typing every 8 seconds (Discord's typing timeout is 10 seconds)
-        return setInterval(() => {
-            if (this.canShowTyping(channel)) {
-                void channel.sendTyping().catch((error: Error) => {
-                    logger.warn({ error, channelId: channel.id }, "Failed to send typing indicator");
-                });
-            }
-        }, 8000);
-    }
-
-    /**
-     * Type guard for channels that support typing indicators
-     */
-    private canShowTyping(channel: TextBasedChannel): channel is TypingCapableChannel {
-        return 'sendTyping' in channel;
-    }
-
-    /**
-     * Gets the current queue status
-     */
-    public getStatus(): { queueLength: number; processing: boolean } {
-        return {
-            queueLength: this.queue.length,
-            processing: this.processing
-        };
     }
 } 

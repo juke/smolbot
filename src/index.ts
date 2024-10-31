@@ -20,21 +20,45 @@ const client = new Client({
 
 const groqHandler = new GroqHandler(process.env.GROQ_API_KEY || "");
 
-// Initialize the MessageHandler only once
-if (!MessageHandler['instance']) {
-    new MessageHandler(groqHandler);
+// Initialize the bot
+async function initializeBot(): Promise<void> {
+    try {
+        // Initialize MessageHandler
+        await MessageHandler.initialize(groqHandler);
+        const messageHandler = MessageHandler.getInstance();
+
+        client.once(Events.ClientReady, async (readyClient) => {
+            logger.info(`Logged in as ${readyClient.user.tag}!`);
+            // Update emoji cache and load channel caches when bot is ready
+            await messageHandler.updateEmojis(readyClient);
+            logger.info("Bot initialization complete");
+        });
+
+        client.on(Events.MessageCreate, async (message) => {
+            if (message.author.bot) return;
+            await messageHandler.handleMessage(client, message);
+        });
+
+        // Cleanup on exit
+        process.on("SIGINT", async () => {
+            logger.info("Received SIGINT. Cleaning up...");
+            await messageHandler.cleanup();
+            process.exit(0);
+        });
+
+        process.on("SIGTERM", async () => {
+            logger.info("Received SIGTERM. Cleaning up...");
+            await messageHandler.cleanup();
+            process.exit(0);
+        });
+
+        // Login to Discord
+        await client.login(process.env.DISCORD_TOKEN);
+    } catch (error) {
+        logger.error({ error }, "Failed to initialize bot");
+        process.exit(1);
+    }
 }
 
-client.once(Events.ClientReady, (readyClient) => {
-    logger.info(`Logged in as ${readyClient.user.tag}!`);
-    
-    // Update emoji cache when bot is ready
-    MessageHandler.getInstance().updateEmojis(readyClient);
-});
-
-client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot) return;
-    await MessageHandler.getInstance().handleMessage(client, message);
-});
-
-client.login(process.env.DISCORD_TOKEN);
+// Start the bot
+void initializeBot();

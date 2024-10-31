@@ -8,6 +8,9 @@ import { createLogger } from "../../utils/logger";
 import { IntervalMessageHandler } from "./IntervalMessageHandler";
 import { EmojiManager } from "../emoji/EmojiManager";
 import { BotInteractionQueue } from "./BotInteractionQueue";
+import { SQLiteAdapter } from "../../database/SQLiteAdapter";
+import path from "path";
+import fs from "fs/promises";
 
 const logger = createLogger("MessageHandler");
 
@@ -24,55 +27,74 @@ type TypingCapableChannel = TextBasedChannel & {
 export class MessageHandler {
     private static instance: MessageHandler;
     private readonly processingMessages: Set<string> = new Set();
-    private readonly cacheManager: ChannelCacheManager;
-    private readonly imageProcessor: ImageProcessor;
-    private readonly contextBuilder: ContextBuilder;
-    private readonly botMentionHandler: BotMentionHandler;
-    private readonly intervalHandler: IntervalMessageHandler;
-    private readonly emojiManager: EmojiManager;
-    private readonly interactionQueue: BotInteractionQueue;
+    private cacheManager!: ChannelCacheManager;
+    private imageProcessor!: ImageProcessor;
+    private contextBuilder!: ContextBuilder;
+    private botMentionHandler!: BotMentionHandler;
+    private intervalHandler!: IntervalMessageHandler;
+    private emojiManager!: EmojiManager;
+    private interactionQueue!: BotInteractionQueue;
     private readonly groqHandler: GroqHandler;
+    private initialized = false;
 
-    constructor(groqHandler: GroqHandler) {
-        if (MessageHandler.instance) {
-            throw new Error("MessageHandler is already instantiated");
-        }
-
+    private constructor(groqHandler: GroqHandler) {
         this.groqHandler = groqHandler;
+    }
 
-        this.cacheManager = new ChannelCacheManager({ maxSize: 20 });
-        this.imageProcessor = new ImageProcessor(groqHandler);
-        this.contextBuilder = new ContextBuilder(this.cacheManager, this.imageProcessor);
-        this.botMentionHandler = new BotMentionHandler(
-            groqHandler,
-            this.imageProcessor,
-            this.contextBuilder,
-            this.cacheManager
-        );
-
-        this.intervalHandler = new IntervalMessageHandler(
-            groqHandler,
-            this.contextBuilder,
-            this.cacheManager
-        );
-
-        this.emojiManager = new EmojiManager();
-
-        this.interactionQueue = new BotInteractionQueue({
-            minDelayMs: 2000
-        });
-
-        // Initialize emoji system
-        this.updateEmojis = this.updateEmojis.bind(this);
-
-        MessageHandler.instance = this;
+    public static async initialize(groqHandler: GroqHandler): Promise<MessageHandler> {
+        if (!MessageHandler.instance) {
+            const instance = new MessageHandler(groqHandler);
+            await instance.initializeComponents();
+            MessageHandler.instance = instance;
+        }
+        return MessageHandler.instance;
     }
 
     public static getInstance(): MessageHandler {
-        if (!MessageHandler.instance) {
-            throw new Error("MessageHandler not initialized");
+        if (!MessageHandler.instance || !MessageHandler.instance.initialized) {
+            throw new Error("MessageHandler not initialized. Call initialize() first");
         }
         return MessageHandler.instance;
+    }
+
+    /**
+     * Initializes all components
+     */
+    private async initializeComponents(): Promise<void> {
+        try {
+            const dataDir = path.join(__dirname, "../../../data");
+            await fs.mkdir(dataDir, { recursive: true });
+            
+            const dbPath = path.join(dataDir, "cache.db");
+            const database = new SQLiteAdapter(dbPath);
+            await database.initialize();
+            
+            // Initialize components
+            this.cacheManager = new ChannelCacheManager({ maxSize: 20 }, database);
+            this.imageProcessor = new ImageProcessor(this.groqHandler);
+            this.contextBuilder = new ContextBuilder(this.cacheManager, this.imageProcessor);
+            this.botMentionHandler = new BotMentionHandler(
+                this.groqHandler,
+                this.imageProcessor,
+                this.contextBuilder,
+                this.cacheManager
+            );
+            this.intervalHandler = new IntervalMessageHandler(
+                this.groqHandler,
+                this.contextBuilder,
+                this.cacheManager
+            );
+            this.emojiManager = new EmojiManager();
+            this.interactionQueue = new BotInteractionQueue({
+                minDelayMs: 2000
+            });
+
+            this.initialized = true;
+            logger.info("MessageHandler initialized successfully");
+        } catch (error) {
+            logger.error({ error }, "Failed to initialize MessageHandler");
+            throw error;
+        }
     }
 
     /**
@@ -176,19 +198,29 @@ export class MessageHandler {
      */
     public async initializeCache(channel: TextChannel): Promise<void> {
         logger.info({ channelId: channel.id }, "Initializing channel cache");
-        const messages = await channel.messages.fetch({ limit: this.cacheManager.getMaxSize() });
         
-        for (const message of messages.values()) {
-            const images = await this.imageProcessor.processImages(message);
-            this.cacheManager.addMessage(channel.id, {
-                id: message.id,
-                content: message.content,
-                authorId: message.author.id,
-                authorName: message.member?.displayName || message.author.username,
-                timestamp: message.createdAt,
-                images,
-                referencedMessage: message.reference?.messageId
+        // First try to load from database
+        await this.cacheManager.loadCache(channel.id);
+        
+        // If cache is empty or outdated, fetch from Discord
+        const cache = this.cacheManager.getCache(channel.id);
+        if (!cache || cache.messages.length < this.cacheManager.getMaxSize()) {
+            const messages = await channel.messages.fetch({ 
+                limit: this.cacheManager.getMaxSize() 
             });
+            
+            for (const message of messages.values()) {
+                const images = await this.imageProcessor.processImages(message);
+                await this.cacheManager.addMessage(channel.id, {
+                    id: message.id,
+                    content: message.content,
+                    authorId: message.author.id,
+                    authorName: message.member?.displayName || message.author.username,
+                    timestamp: message.createdAt,
+                    images,
+                    referencedMessage: message.reference?.messageId
+                });
+            }
         }
 
         // Start interval monitoring for this channel
@@ -201,13 +233,58 @@ export class MessageHandler {
     }
 
     /**
+     * Loads caches for all accessible channels
+     */
+    private async loadAllChannelCaches(client: Client): Promise<void> {
+        try {
+            const channels = client.channels.cache.filter(
+                (channel): channel is TextChannel => 
+                    channel.type === ChannelType.GuildText
+            );
+
+            logger.info(`Loading caches for ${channels.size} channels`);
+
+            for (const channel of channels.values()) {
+                await this.initializeCache(channel);
+            }
+
+            logger.info("Successfully loaded all channel caches");
+        } catch (error) {
+            logger.error({ error }, "Error loading channel caches");
+        }
+    }
+
+    /**
      * Updates emoji cache and refreshes system message
      */
-    public updateEmojis(client: Client): void {
+    public async updateEmojis(client: Client): Promise<void> {
         this.emojiManager.updateEmojiCache(client);
         // Update GroqHandler's emoji list as well
         this.groqHandler.updateEmojiList(client);
-        logger.info("Emoji cache updated");
+        
+        // Load all channel caches after emoji cache is updated
+        await this.loadAllChannelCaches(client);
+        
+        logger.info("Emoji cache updated and channel caches loaded");
+    }
+
+    /**
+     * Cleans up resources before shutdown
+     */
+    public async cleanup(): Promise<void> {
+        try {
+            // Stop all interval monitoring
+            for (const channel of this.intervalHandler.getMonitoredChannels()) {
+                this.stopChannelMonitoring(channel);
+            }
+
+            // Cleanup cache manager
+            await this.cacheManager.cleanup();
+
+            logger.info("Successfully cleaned up resources");
+        } catch (error) {
+            logger.error({ error }, "Error during cleanup");
+        }
     }
 }
 
