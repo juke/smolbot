@@ -54,7 +54,8 @@ export class EmojiManager {
      * Formats a Discord emoji into the proper format
      */
     private formatEmoji(emoji: GuildEmoji): string {
-        return `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`;
+        const prefix = emoji.animated ? "a" : "";
+        return `<${prefix}:${emoji.name}:${emoji.id}>`;
     }
 
     /**
@@ -63,11 +64,11 @@ export class EmojiManager {
     public replaceEmojiNames(text: string): string {
         let processedText = text;
         
-        const emojiPattern = /(?:<a?:\w+:\d+>)|(?::\w+:)/g;
+        const emojiPattern = /(?:<[a]?:\w+:\d+>)|(?::[\w-]+:)/g;
         
         processedText = processedText.replace(emojiPattern, (match) => {
             if (match.startsWith("<")) {
-                const [, animated, name, id] = match.match(/<(a?):([\w]+):(\d+)>/) || [];
+                const [, animated, name, id] = match.match(/<(a?):([^:]+):(\d+)>/) || [];
                 const emojiInfo = this.emojiIdCache.get(id);
                 
                 if (emojiInfo && emojiInfo.name === name) {
@@ -75,12 +76,19 @@ export class EmojiManager {
                 }
             }
             
-            const name = match.replace(/:/g, "");
+            const name = match.replace(/^:|:$/g, "").trim();
             const emojiInfo = this.emojiCache.get(name);
             
             if (emojiInfo) {
                 return emojiInfo.formatted;
             }
+            
+            logger.debug({ 
+                emojiName: name, 
+                match,
+                cacheSize: this.emojiCache.size,
+                availableEmojis: Array.from(this.emojiCache.keys())
+            }, "Emoji lookup attempt");
             
             return match;
         });

@@ -25,7 +25,7 @@ export class ContextBuilder {
     public async buildContext(
         cache: ChannelCache, 
         currentMessage: Message | null, 
-        contextSize = 20,
+        contextSize = 15,
         excludeCurrentMessage = false
     ): Promise<string> {
         const contextMessages: string[] = [];
